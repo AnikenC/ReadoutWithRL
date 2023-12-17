@@ -1,7 +1,6 @@
 matplotlib
 pylatexenc
-qiskit
-qiskit-dynamics
+
 jax>=0.4.9
 jaxlib>=0.4.9
 diffrax
@@ -10,3 +9,7 @@ flax
 gymnax
 optax
 distrax
+
+qiskit
+qiskit-dynamics
+qiskit-ibmq-provider
