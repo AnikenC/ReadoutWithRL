@@ -1,2 +1,12 @@
 matplotlib
 pylatexenc
+qiskit
+qiskit-dynamics
+jax>=0.4.9
+jaxlib>=0.4.9
+diffrax
+chex
+flax
+gymnax
+optax
+distrax
