@@ -168,6 +168,7 @@ def PPO_make_train(config):
         gamma: float,
         time_coeff: float,
         snr_coeff: float,
+        smoothness_coeff: float,
         rough_max_photons: float,
         actual_max_photons: float,
         rough_max_amp_scaled: float,
@@ -193,6 +194,7 @@ def PPO_make_train(config):
             gamma=gamma,
             time_coeff=time_coeff,
             snr_coeff=snr_coeff,
+            smoothness_coeff=smoothness_coeff,
             rough_max_photons=rough_max_photons,
             actual_max_photons=actual_max_photons,
             rough_max_amp_scaled=rough_max_amp_scaled,
@@ -363,6 +365,10 @@ def PPO_make_train(config):
                         "mean batch photon time: {time}",
                         time=info["mean batch photon time"],
                     )
+                    jax.debug.print(
+                        "mean batch smoothness: {smoothness}",
+                        smoothness=info["mean batch smoothness"],
+                    )
 
                     jax.debug.print(
                         "max reward obtained: {reward}",
@@ -374,6 +380,10 @@ def PPO_make_train(config):
                     )
                     jax.debug.print(
                         "photon time of max: {time}", time=info["photon time of max"]
+                    )
+                    jax.debug.print(
+                        "smoothness at max: {smoothness}",
+                        smoothness=info["smoothness at max"],
                     )
 
                 def pass_stats(global_updatestep, info):
@@ -449,6 +459,7 @@ if __name__ == "__main__":
     gamma = gamma_I
     time_coeff = 10.0
     snr_coeff = 10.0
+    smoothness_coeff = 10.0
     rough_max_photons = 30
     actual_max_photons = rough_max_photons * (1 - jnp.exp(-0.5 * kappa * tau_0)) ** 2
     print(actual_max_photons)
@@ -474,6 +485,7 @@ if __name__ == "__main__":
         gamma,
         time_coeff,
         snr_coeff,
+        smoothness_coeff,
         rough_max_photons,
         actual_max_photons,
         rough_max_amp_scaled,
