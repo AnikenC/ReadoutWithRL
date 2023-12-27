@@ -51,7 +51,7 @@ class EnvParams:
     t1: float
     ideal_photon: float
 
-    window_length: Optional[int] = 11
+    window_length: Optional[int] = 15
     kernel: Optional[chex.Array] = jnp.ones(window_length) / window_length
     gauss_mean: Optional[int] = 0.0
     gauss_std: Optional[int] = 2.0
@@ -117,30 +117,28 @@ class BatchedPhotonLangevinReadoutEnv(SingleStepEnvironment):
         chi: float,
         batchsize: int,
         kerr: Optional[float] = 0.002,
-        gamma: Optional[float] = 0.006,
         time_coeff: Optional[float] = 10.0,
         snr_coeff: Optional[float] = 10.0,
         smoothness_coeff: Optional[float] = 10.0,
-        rough_max_photons: Optional[float] = 4.92,
-        actual_max_photons: Optional[float] = 4.265,
-        rough_max_amp_scaled: Optional[float] = 2.5,
-        ideal_photon: Optional[float] = 0.05,
-        scaling_factor: Optional[float] = 20.0,
+        n0: Optional[float] = 30.0,
+        tau_0: Optional[float] = 0.398,
+        res_amp_scaling: Optional[float] = 2.3,
+        nR: Optional[float] = 0.05,
+        snr_scale_factor: Optional[float] = 10.0,
         gamma_I: Optional[float] = 1 / 26,
-        num_t1: Optional[float] = 8.0,
         photon_gamma: Optional[float] = 1 / 300,
-        init_fid: Optional[float] = 0.999,
+        num_t1: Optional[float] = 8.0,
+        init_fid: Optional[float] = 1.0 - 1e-3,
     ):
         super().__init__()
         self._kappa = kappa
         self._tau = 1 / kappa
         self._chi = chi
-        self._gamma = gamma
         self._kerr = kerr
         self._init_fid = init_fid
         self._batchsize = batchsize
         self._t1 = num_t1 * self._tau
-        self._ideal_photon = ideal_photon
+        self._ideal_photon = nR
         self._photon_gamma = photon_gamma
         self._gamma_I = gamma_I
         self.ts_sim = jnp.linspace(0.0, self._t1, 361, dtype=jnp.float64)
@@ -156,12 +154,10 @@ class BatchedPhotonLangevinReadoutEnv(SingleStepEnvironment):
             dcoeff=0.0,
             jump_ts=self.ts_action,
         )
-        self.res_amp_scaling = 0.5 * jnp.sqrt(
-            rough_max_photons * (self._kappa**2 + self._chi**2)
-        )
+        self.a0 = 0.5 * jnp.sqrt(n0 * (self._kappa**2 + self._chi**2))
         self._two_kappa_index = int(0.2 * (len(self.ts_sim) - 1))
         self.photon_uncertainty = 0.5
-        self.max_signal_amp = rough_max_amp_scaled
+        self.mu = res_amp_scaling
         self.min_acq_time = 0.032
         self.precompile()
         self.photon_limit = self.determine_max_photon()
@@ -170,13 +166,17 @@ class BatchedPhotonLangevinReadoutEnv(SingleStepEnvironment):
             jnp.fft.fftfreq(n=len(self.ts_action), d=self._t1 / len(self.ts_action))
             * self._tau
         )
-        self.scaling_factor = scaling_factor
+        self.scaling_factor = snr_scale_factor
         self.ind = 50
         self.pF_factor = snr_coeff
         self.time_factor = time_coeff
         self.smoothness_factor = smoothness_coeff
         self.photon_penalty = 100.0
-        self.actual_max_photons = actual_max_photons
+        self.actual_max_photons = n0 * (
+            1.0
+            - 2.0 * jnp.exp(-0.5 * kappa * tau_0) * jnp.cos(0.5 * chi * tau_0)
+            + jnp.exp(-kappa * tau_0)
+        )
         self.dt = self._t1 / len(self.ts_sim - 1)
 
     @property
@@ -194,31 +194,35 @@ class BatchedPhotonLangevinReadoutEnv(SingleStepEnvironment):
 
     def determine_max_photon(self):
         real_action = jnp.ones_like(self.ts_action, dtype=jnp.float64)
-        res_drive = self.res_amp_scaling * real_action
-        normalizing_factor = jnp.clip(
-            self.max_signal_amp * self.res_amp_scaling / jnp.absolute(res_drive),
-            0.0,
-            1.0,
-        )
-        res_drive *= normalizing_factor
+        res_drive = self.a0 * real_action
         res_drive = self.drive_smoother(res_drive)
         results = self.calc_results(res_drive)
         results_g = results[:, 0] + 1.0j * results[:, 1]
         max_photon = jnp.max(jnp.abs(results_g) ** 2)
         return max_photon
 
-    def get_baseline_smoothness(self):
-        t1 = -2 / self._kappa * jnp.log(1.0 - 1 / self.max_signal_amp)
-        t2 = 0.25
-        t3 = (
-            -2
-            / self._kappa
-            * jnp.log(self.max_signal_amp / (1.0 + self.max_signal_amp))
-        )
+    def t1(self):
+        return -2 / self._kappa * jnp.log(1.0 - 1 / self.mu)
+
+    def t3(self):
+        return -2 / self._kappa * jnp.log(self.mu / (1.0 + self.mu))
+
+    def dummy_a3r_waveform(
+        self,
+        t1: Optional[float] = None,
+        t2: Optional[float] = None,
+        t3: Optional[float] = None,
+    ):
+        if t1 is None:
+            t1 = self.t1()
+        if t2 is None:
+            t2 = 0.25
+        if t3 is None:
+            t3 = self.t3()
         signal = jnp.heaviside(t1 - self.ts_action, 0.0)
         signal += (
             1
-            / self.max_signal_amp
+            / self.mu
             * (
                 jnp.heaviside(t2 - self.ts_action, 0.0)
                 - jnp.heaviside(t1 - self.ts_action, 0.0)
@@ -227,8 +231,12 @@ class BatchedPhotonLangevinReadoutEnv(SingleStepEnvironment):
         signal -= jnp.heaviside(t2 + t3 - self.ts_action, 0.0) - jnp.heaviside(
             t2 - self.ts_action, 0.0
         )
-        signal = self.drive_smoother(signal)
-        smoothness = self.calculate_batch_smoothness(signal)
+        return signal
+
+    def get_baseline_smoothness(self):
+        signal = self.dummy_a3r_waveform()
+        smoothed_signal = self.drive_smoother(signal)
+        smoothness = self.calculate_batch_smoothness(smoothed_signal)
         return smoothness
 
     def step_env(
@@ -238,9 +246,9 @@ class BatchedPhotonLangevinReadoutEnv(SingleStepEnvironment):
         new_timestep = state.timestep + 1
 
         real_action = action[:, 0 : params.num_actions]
-        res_drive = self.res_amp_scaling * real_action.astype(jnp.float64)
+        res_drive = self.a0 * real_action.astype(jnp.float64)
         normalizing_factor = jnp.clip(
-            self.max_signal_amp * self.res_amp_scaling / jnp.absolute(res_drive),
+            self.mu * self.a0 / jnp.absolute(res_drive),
             0.0,
             1.0,
         )
@@ -378,7 +386,7 @@ class BatchedPhotonLangevinReadoutEnv(SingleStepEnvironment):
         )
         max_pf = jnp.max(b_pf, axis=-1)
 
-        b_actions_normed = b_actions / (self.max_signal_amp * self.res_amp_scaling)
+        b_actions_normed = b_actions / (self.mu * self.a0)
         b_smoothness = self.batched_fast_smoothness_calc(b_actions_normed)
 
         return (
@@ -476,7 +484,6 @@ class BatchedPhotonLangevinReadoutEnv(SingleStepEnvironment):
             - self.time_factor * photon_reset_time
             - self.smoothness_factor
             * relu((smoothness_vals / self.baseline_smoothness) - 1.0)
-            # - self.photon_penalty * jnp.abs((max_photons / self.actual_max_photons - 1.0))
             - self.photon_penalty * relu((max_photons / self.actual_max_photons - 1.0))
         )
 
