@@ -40,6 +40,8 @@ class EnvState:
     photon_time: float
     smoothness_at_max: float
 
+    std_batch_reward: float
+
     action_of_max: chex.Array
     timestep: int
 
@@ -282,6 +284,7 @@ class BatchedPhotonLangevinReadoutEnv(SingleStepEnvironment):
                 photon_at_max=old_state.photon_at_max,
                 photon_time=old_state.photon_time,
                 smoothness_at_max=old_state.smoothness_at_max,
+                std_batch_reward=new_state.std_batch_reward,
                 action_of_max=old_state.action_of_max,
                 timestep=new_state.timestep,
             )
@@ -501,6 +504,8 @@ class BatchedPhotonLangevinReadoutEnv(SingleStepEnvironment):
         mean_batch_photon_time = jnp.mean(photon_reset_time)
         mean_smoothness = jnp.mean(smoothness_at_max)
 
+        std_batch_reward = jnp.std(batched_reward)
+
         state = jnp.array(
             [
                 mean_batch_reward,
@@ -513,6 +518,7 @@ class BatchedPhotonLangevinReadoutEnv(SingleStepEnvironment):
                 photon_at_max,
                 photon_reset_time_at_max,
                 smoothness_at_max,
+                std_batch_reward,
                 max_reward_index,
             ],
             dtype=jnp.float64,
@@ -536,6 +542,7 @@ class BatchedPhotonLangevinReadoutEnv(SingleStepEnvironment):
             photon_at_max=0.0,
             photon_time=0.1,
             smoothness_at_max=0.0,
+            std_batch_reward=1.0,
             action_of_max=jnp.zeros((params.num_actions,), dtype=self.float_dtype),
             timestep=0,
         )
@@ -556,6 +563,7 @@ class BatchedPhotonLangevinReadoutEnv(SingleStepEnvironment):
             "photon at max": env_state.photon_at_max,
             "photon time of max": env_state.photon_time,
             "smoothness at max": env_state.smoothness_at_max,
+            "std batch reward": env_state.std_batch_reward,
             "action of max": env_state.action_of_max,
             "timestep": env_state.timestep,
         }

@@ -384,6 +384,11 @@ def PPO_make_train(config):
                         smoothness=info["smoothness at max"],
                     )
 
+                    jax.debug.print(
+                        "std batch reward: {std}",
+                        std=info["std batch reward"],
+                    )
+
                 def pass_stats(global_updatestep, info):
                     pass
 
