@@ -10,6 +10,135 @@ from typing import Optional, Union
 from helper_funcs.utils import *
 
 MHz = 1e6
+ns = 1e-9
+
+
+class SSAcquisitionScan:
+    def __init__(
+        self,
+        qubit: int,
+        backend: Backend,
+        acq_duration_dt: int,
+        acq_latency_sec: float,
+        init_acq_time_sec: float,
+        final_acq_time_sec: float,
+    ):
+        super().__init__()
+        self.qubit = qubit
+        self.backend = backend
+        single_q_dict = get_single_qubit_pulses(qubit, backend)
+        self.meas_pulse = single_q_dict["meas pulse"]
+        self.x_pulse = single_q_dict["x pulse"]
+        dt = backend.configuration().dt
+        start_time_sec = get_closest_multiple_of_16(get_dt_from(init_acq_time_sec)) * dt
+        final_time_sec = (
+            get_closest_multiple_of_16(get_dt_from(final_acq_time_sec)) * dt
+        )
+        self.acq_duration_dt = acq_duration_dt
+        self.acq_latency_dt = get_closest_multiple_of_16(get_dt_from(acq_latency_sec))
+        self.acq_delay_linspace = np.linspace(
+            start_time_sec,
+            final_time_sec,
+            int(
+                get_closest_multiple_of_16(get_dt_from(final_time_sec - start_time_sec))
+                / acq_duration_dt
+            ),
+        )
+        self.meas_duration = (
+            get_closest_multiple_of_16(get_dt_from(self.acq_delay_linspace[-1]))
+            + 4 * self.acq_duration_dt
+        )
+        print(
+            f"Times Linspace Size = {len(self.acq_delay_linspace)}, ranging from {int(1e3*start_time_sec/ns)/1e3}ns to {int(1e3*final_time_sec/ns)/1e3}ns"
+        )
+        print(f"Measure Pulse Duration: {int(1e3*dt*self.meas_duration/ns)/1e3}ns")
+        self.recommended_batch_size = int(300 / (2 * len(self.acq_delay_linspace)))
+        print(
+            f"Recommended Batch Size: {self.recommended_batch_size}, job size: {self.recommended_batch_size * 2 * len(self.acq_delay_linspace)}"
+        )
+
+    def ss_acq_scan_exp(self, amp):
+        exp_g = []
+        exp_e = []
+
+        m_pulse = pulse.GaussianSquare(
+            duration=self.meas_duration,
+            amp=amp,
+            sigma=self.meas_pulse.sigma,
+            width=self.meas_duration - 4 * self.meas_pulse.sigma,
+            angle=self.meas_pulse.angle,
+            limit_amplitude=True,
+        )
+
+        for kappa_delay_sec in self.acq_delay_linspace:
+            kappa_delay_dt = get_closest_multiple_of_16(get_dt_from(kappa_delay_sec))
+
+            with pulse.build(
+                backend=self.backend,
+                default_alignment="left",
+                name=f"acq scan g delay: {int(1e3*kappa_delay_sec/ns)/1e3}",
+            ) as acq_g_sched:
+                meas_chan = pulse.measure_channel(self.qubit)
+                acq_chan = pulse.acquire_channel(self.qubit)
+
+                pulse.delay(self.acq_latency_dt, meas_chan)
+                pulse.play(m_pulse, meas_chan)
+                pulse.delay(kappa_delay_dt, acq_chan)
+                pulse.acquire(
+                    duration=self.acq_duration_dt,
+                    qubit_or_channel=acq_chan,
+                    register=pulse.MemorySlot(self.qubit),
+                )
+            exp_g.append(acq_g_sched)
+
+            with pulse.build(
+                backend=self.backend,
+                default_alignment="left",
+                name=f"acq scan e delay: {int(1e3*kappa_delay_sec/ns)/1e3}",
+            ) as acq_e_sched:
+                qubit_chan = pulse.drive_channel(self.qubit)
+                meas_chan = pulse.measure_channel(self.qubit)
+                acq_chan = pulse.acquire_channel(self.qubit)
+
+                with pulse.align_right():
+                    pulse.delay(self.acq_latency_dt, meas_chan)
+                    pulse.play(self.x_pulse, qubit_chan)
+                pulse.play(m_pulse, meas_chan)
+                pulse.delay(kappa_delay_dt, acq_chan)
+                pulse.acquire(
+                    duration=self.acq_duration_dt,
+                    qubit_or_channel=acq_chan,
+                    register=pulse.MemorySlot(self.qubit),
+                )
+            exp_e.append(acq_e_sched)
+        return exp_g, exp_e
+
+    def get_jobs(self, amp_vals: np.ndarray, batch_size: Optional[int] = None):
+        """
+        amp_vals should be an array of shape (num_amps,)
+        """
+
+        if batch_size is None:
+            batch_size = self.recommended_batch_size
+
+        if len(amp_vals) % batch_size != 0:
+            raise ValueError("num_batches doesn't evenly divide the size of amp_vals")
+
+        num_batches = int(len(amp_vals) / batch_size)
+
+        all_exp_g = []
+        all_exp_e = []
+
+        for amp in amp_vals:
+            exp_g, exp_e = self.ss_acq_scan_exp(amp)
+            all_exp_g.append(exp_g)
+            all_exp_e.append(exp_e)
+
+        all_exp_g = np.array(all_exp_g).reshape(num_batches, -1)
+        all_exp_e = np.array(all_exp_e).reshape(num_batches, -1)
+
+        total_exp = np.concatenate((all_exp_g, all_exp_e), axis=-1)
+        return total_exp
 
 
 class RRFreqSpec:
@@ -18,7 +147,7 @@ class RRFreqSpec:
         qubit: int,
         backend: Backend,
         freq_span: Optional[float] = None,
-        num_experiments: Optional[float] = None,
+        num_experiments: Optional[int] = None,
         freq_linspace: Optional[float] = None,
         fit_func_name: Optional[str] = "gaussian",
         chi_est: Optional[float] = 0.6e6,

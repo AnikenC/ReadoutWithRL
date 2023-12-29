@@ -9,6 +9,61 @@ from qiskit.result import Result
 from typing import Optional, Union
 
 
+import math
+
+
+def classify(point: complex, mean_a, mean_b):
+    """Classify the given state as |0> or |1>."""
+
+    def distance(a, b):
+        return math.sqrt(
+            (np.real(a) - np.real(b)) ** 2 + (np.imag(a) - np.imag(b)) ** 2
+        )
+
+    return int(distance(point, mean_b) < distance(point, mean_a))
+
+
+def get_fidelity(array_g, array_e):
+    """
+    Array inputs need to be of shape (num_exp, num_shots)
+    """
+    means_g = np.mean(array_g, axis=-1)
+    means_e = np.mean(array_e, axis=-1)
+    num_shots = array_g.shape[-1]
+
+    fidelity_arr = np.zeros(len(means_g))
+
+    for ind, (g_mean, e_mean) in enumerate(zip(means_g, means_e)):
+        g_gnd = 0
+        g_exc = 0
+
+        e_gnd = 0
+        e_exc = 0
+
+        for result in array_g[ind]:
+            res = classify(result, g_mean, e_mean)
+            if res == 0:
+                g_gnd += 1
+            if res == 1:
+                g_exc += 1
+
+        for result in array_e[ind]:
+            res = classify(result, g_mean, e_mean)
+            if res == 0:
+                e_gnd += 1
+            if res == 1:
+                e_exc += 1
+
+        fidelity = 1.0 - 0.5 * (g_exc + e_gnd) / num_shots
+        fidelity_arr[ind] = fidelity
+    return fidelity_arr
+
+
+def flatten(inp_list):
+    arr = np.array(inp_list).reshape(-1)
+    return arr.tolist()
+
+
 def gaussian_func(x, a, b, c):
     return a * np.exp(-((x - b) ** 2) / (2 * c**2))
 
