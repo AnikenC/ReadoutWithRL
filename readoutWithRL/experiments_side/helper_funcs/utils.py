@@ -68,6 +68,10 @@ def gaussian_func(x, a, b, c):
     return a * np.exp(-((x - b) ** 2) / (2 * c**2))
 
 
+def gaussian_func_with_offset(x, a, b, c, d):
+    return a * np.exp(-((x - b) ** 2) / (2 * c**2)) + d
+
+
 def sinc_func(x, a, b, c):
     return a * np.sinc((x - b) / c)
 
@@ -91,6 +95,18 @@ def fit_function(x_values, y_values, function, init_params):
     y_fit = function(x_values, *fitparams)
 
     return fitparams, y_fit
+
+
+def fit_gaussian_with_offset(x_values, y_values, init_params):
+    """
+    Init Params should have 4 Values (Amplitude, Mean, STD, Offset)
+    """
+
+    params, cov = fit_function(
+        x_values, y_values, gaussian_func_with_offset, init_params
+    )
+    fit_res = gaussian_func_with_offset(x_values, *params)
+    return params, fit_res
 
 
 def acquisition_checker(job: list):
