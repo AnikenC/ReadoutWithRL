@@ -177,6 +177,7 @@ def PPO_make_train(config):
         photon_gamma: float,
         num_t1: float,
         init_fid: float,
+        photon_weight: float,
         batchsize: int,
         num_envs: int,
     ):
@@ -202,6 +203,7 @@ def PPO_make_train(config):
             photon_gamma=photon_gamma,
             num_t1=num_t1,
             init_fid=init_fid,
+            photon_weight=photon_weight
         )
         env = VecEnv(env)
         # INIT NETWORK

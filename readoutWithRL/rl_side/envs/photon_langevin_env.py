@@ -56,7 +56,7 @@ class EnvParams:
     window_length: Optional[int] = 15
     kernel: Optional[chex.Array] = jnp.ones(window_length) / window_length
     gauss_mean: Optional[int] = 0.0
-    gauss_std: Optional[int] = 2.0
+    gauss_std: Optional[int] = 1.0
     small_window: Optional[chex.Array] = jnp.linspace(
         -0.5 * (window_length - 1), 0.5 * (window_length - 1), window_length
     )
@@ -131,6 +131,7 @@ class BatchedPhotonLangevinReadoutEnv(SingleStepEnvironment):
         photon_gamma: Optional[float] = 1 / 300,
         num_t1: Optional[float] = 8.0,
         init_fid: Optional[float] = 1.0 - 1e-3,
+        photon_weight: Optional[float] = 1.0,
     ):
         super().__init__()
         self._kappa = kappa
@@ -179,6 +180,7 @@ class BatchedPhotonLangevinReadoutEnv(SingleStepEnvironment):
             - 2.0 * jnp.exp(-0.5 * kappa * tau_0) * jnp.cos(0.5 * chi * tau_0)
             + jnp.exp(-kappa * tau_0)
         )
+        self.photon_weight = photon_weight
         self.dt = self._t1 / len(self.ts_sim - 1)
 
     @property
@@ -238,7 +240,7 @@ class BatchedPhotonLangevinReadoutEnv(SingleStepEnvironment):
     def get_baseline_smoothness(self):
         signal = self.dummy_a3r_waveform()
         smoothed_signal = self.drive_smoother(signal)
-        smoothness = self.calculate_batch_smoothness(smoothed_signal)
+        smoothness = self.calculate_batch_smoothness(smoothed_signal) * 2.0
         return smoothness
 
     def step_env(
@@ -379,7 +381,7 @@ class BatchedPhotonLangevinReadoutEnv(SingleStepEnvironment):
         pulse_reset_photons = b_higher_photons[
             jnp.arange(self._batchsize), closest_time_to_reset_ind
         ]
-        photon_reset_time = pulse_end_times + self._tau * jnp.log(
+        photon_reset_time = pulse_end_times + self.photon_weight * self._tau * jnp.log(
             pulse_reset_photons / self._ideal_photon
         )
         photon_reset_time = jnp.clip(photon_reset_time, a_min=pulse_end_times)
