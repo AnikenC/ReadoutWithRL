@@ -56,7 +56,7 @@ class EnvParams:
     window_length: Optional[int] = 15
     kernel: Optional[chex.Array] = jnp.ones(window_length) / window_length
     gauss_mean: Optional[int] = 0.0
-    gauss_std: Optional[int] = 1.0
+    gauss_std: Optional[int] = 2.0
     small_window: Optional[chex.Array] = jnp.linspace(
         -0.5 * (window_length - 1), 0.5 * (window_length - 1), window_length
     )
@@ -175,6 +175,7 @@ class BatchedPhotonLangevinReadoutEnv(SingleStepEnvironment):
         self.time_factor = time_coeff
         self.smoothness_factor = smoothness_coeff
         self.photon_penalty = 100.0
+        self.order_penalty = 100.0
         self.actual_max_photons = n0 * (
             1.0
             - 2.0 * jnp.exp(-0.5 * kappa * tau_0) * jnp.cos(0.5 * chi * tau_0)
@@ -390,6 +391,7 @@ class BatchedPhotonLangevinReadoutEnv(SingleStepEnvironment):
             photon_reset_time.reshape(-1, 1) - self.ts_sim.reshape(1, -1), 1.0
         )
         max_pf = jnp.max(b_pf, axis=-1)
+        max_pf_times = self.ts_sim[jnp.argmax(b_pf, axis=-1)]
 
         b_actions_normed = b_actions / (self.mu * self.a0)
         b_smoothness = self.batched_fast_smoothness_calc(b_actions_normed)
@@ -398,6 +400,7 @@ class BatchedPhotonLangevinReadoutEnv(SingleStepEnvironment):
             max_pf,
             max_photons,
             photon_reset_time,
+            max_pf_times,
             b_smoothness,
             b_pf,
             b_higher_photons,
@@ -475,6 +478,7 @@ class BatchedPhotonLangevinReadoutEnv(SingleStepEnvironment):
             max_pf,
             max_photons,
             photon_reset_time,
+            max_pf_times,
             smoothness_vals,
             b_pf,
             b_higher_photons,
@@ -490,6 +494,7 @@ class BatchedPhotonLangevinReadoutEnv(SingleStepEnvironment):
             - self.smoothness_factor
             * relu((smoothness_vals / self.baseline_smoothness) - 1.0)
             - self.photon_penalty * relu((max_photons / self.actual_max_photons - 1.0))
+            - self.order_penalty * (1.0 - jnp.sign(photon_reset_time - max_pf_times))
         )
 
         max_reward = jnp.max(batched_reward)
