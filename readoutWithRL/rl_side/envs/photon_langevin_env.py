@@ -56,7 +56,7 @@ class EnvParams:
     window_length: Optional[int] = 15
     kernel: Optional[chex.Array] = jnp.ones(window_length) / window_length
     gauss_mean: Optional[int] = 0.0
-    gauss_std: Optional[int] = 2.0
+    gauss_std: Optional[int] = 1.0
     small_window: Optional[chex.Array] = jnp.linspace(
         -0.5 * (window_length - 1), 0.5 * (window_length - 1), window_length
     )
