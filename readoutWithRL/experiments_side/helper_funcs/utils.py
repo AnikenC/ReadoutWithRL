@@ -6,6 +6,8 @@ from qiskit.providers.backend import Backend
 from qiskit.circuit import Parameter
 from qiskit.result import Result
 
+from scipy.special import erf
+
 from typing import Optional, Union
 
 
@@ -29,6 +31,34 @@ def get_fidelity(array_g, array_e):
     """
     means_g = np.mean(array_g, axis=-1)
     means_e = np.mean(array_e, axis=-1)
+    overall_means = 0.5 * (means_g + means_e)
+    overall_means = overall_means.reshape(-1, 1)
+
+    array_g -= overall_means
+    array_e -= overall_means
+
+    means_g = np.mean(array_g, axis=-1)
+    means_e = np.mean(array_e, axis=-1)
+
+    angle_dev = 0.5 * (np.angle(means_g) + np.angle(means_e)) - 0.5 * np.pi
+    angle_dev = angle_dev.reshape(-1, 1)
+
+    array_g *= np.exp(-1.0j * angle_dev)
+    array_e *= np.exp(-1.0j * angle_dev)
+
+    array_g = array_g.real
+    array_e = array_e.real
+
+    means_g = np.mean(array_g, axis=-1)
+    means_e = np.mean(array_e, axis=-1)
+    sep = np.abs(means_g - means_e)
+
+    std_g = np.std(array_g, axis=-1)
+    std_e = np.std(array_e, axis=-1)
+    avg_std = 0.5 * (std_g + std_e)
+
+    sep_fidelity = 0.5 * (1.0 + erf(sep / (2 * np.sqrt(2) * avg_std)))
+
     num_shots = array_g.shape[-1]
 
     fidelity_arr = np.zeros(len(means_g))
@@ -56,7 +86,7 @@ def get_fidelity(array_g, array_e):
 
         fidelity = 1.0 - 0.5 * (g_exc + e_gnd) / num_shots
         fidelity_arr[ind] = fidelity
-    return fidelity_arr
+    return fidelity_arr, sep_fidelity
 
 
 def flatten(inp_list):
