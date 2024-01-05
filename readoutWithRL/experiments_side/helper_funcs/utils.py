@@ -119,6 +119,8 @@ def get_closest_multiple_of_16(num):
 def get_dt_from(sec, dt: Optional[float] = 1 / 4.5 * 1.0e-9):
     return get_closest_multiple_of(sec / dt, 16)
 
+def convert_arr_to_dt(arr, dt: Optional[float] = 1/4.5e9):
+    return np.round(arr/(16 * dt)) * 16 * dt
 
 def fit_function(x_values, y_values, function, init_params):
     fitparams, conv = curve_fit(function, x_values, y_values, init_params)
