@@ -241,7 +241,7 @@ class BatchedPhotonLangevinReadoutEnv(SingleStepEnvironment):
     def get_baseline_smoothness(self):
         signal = self.dummy_a3r_waveform()
         smoothed_signal = self.drive_smoother(signal)
-        smoothness = self.calculate_batch_smoothness(smoothed_signal) * 2.0
+        smoothness = self.calculate_batch_smoothness(smoothed_signal)
         return smoothness
 
     def step_env(
