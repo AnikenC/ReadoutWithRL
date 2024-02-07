@@ -31,7 +31,24 @@ def classify_results(res_array, mean_g, mean_e):
     Array inputs need to be of shape (num_exp, num_shots)
     """
 
-    means = np.mean(res_array, axis=-1)
+    prob_0_arr = np.zeros(res_array.shape[0])
+    prob_1_arr = np.zeros(res_array.shape[0])
+
+    for ind, arr_obj in enumerate(res_array):
+        g = 0
+        e = 0
+
+        for result in arr_obj:
+            res = classify(result, mean_g, mean_e)
+            if res == 0:
+                g += 1
+            if res == 1:
+                e += 1
+
+        prob_0_arr[ind] = g / (g + e)
+        prob_1_arr[ind] = e / (g + e)
+
+    return prob_0_arr, prob_1_arr
 
 
 def get_fidelity(array_g, array_e):
