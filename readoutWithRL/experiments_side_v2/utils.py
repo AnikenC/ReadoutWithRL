@@ -14,6 +14,7 @@ from typing import Optional, Union
 
 import math
 
+
 def classify(point: complex, mean_a, mean_b):
     """Classify the given state as |0> or |1>."""
 
@@ -23,6 +24,14 @@ def classify(point: complex, mean_a, mean_b):
         )
 
     return int(distance(point, mean_b) < distance(point, mean_a))
+
+
+def classify_results(res_array, mean_g, mean_e):
+    """
+    Array inputs need to be of shape (num_exp, num_shots)
+    """
+
+    means = np.mean(res_array, axis=-1)
 
 
 def get_fidelity(array_g, array_e):
