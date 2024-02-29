@@ -1,6 +1,11 @@
-from envs.environment_template import SingleStepEnvironment
+## Readout Environment based on Quantum Langevin Equation simulation of
+## readout resonator photon dynamics
 
+# Imports for Gymnax Environment
+from envs.environment_template import SingleStepEnvironment
 from gymnax.environments.environment import EnvParams
+
+# Standard Imports
 import jax
 import jax.numpy as jnp
 from jax import lax, config, vmap, jit
@@ -14,6 +19,7 @@ from flax import struct
 
 import matplotlib.pyplot as plt
 
+# Imports specific to ODE Simulator
 from diffrax import (
     diffeqsolve,
     Tsit5,
@@ -28,6 +34,11 @@ config.update("jax_enable_x64", True)
 
 @struct.dataclass
 class EnvState:
+    """
+    Flax Dataclass used to store Dynamic Environment State
+    All relevant params that get updated each step should be stored here
+    """
+
     mean_batch_reward: float
     mean_batch_pF: float
     mean_batch_photon: float
@@ -48,6 +59,12 @@ class EnvState:
 
 @struct.dataclass
 class EnvParams:
+    """
+    Flax Dataclass used to store Static Environment Params
+    All static env params should be kept here, though they can be equally kept
+    in the Jax class as well
+    """
+
     args: chex.Array
     batchsize: int
     t1: float
@@ -186,7 +203,9 @@ class BatchedPhotonLangevinReadoutEnv(SingleStepEnvironment):
 
     @property
     def default_params(self) -> EnvParams:
-        # Default Environment Parameters
+        """
+        IMPORTANT Retrieving the Default Env Params
+        """
         return EnvParams(
             args=jnp.array(
                 [0.5 * self._kappa, self._chi, self._kerr],
@@ -198,6 +217,7 @@ class BatchedPhotonLangevinReadoutEnv(SingleStepEnvironment):
         )
 
     def determine_max_photon(self):
+        """Physics Specific Function"""
         real_action = jnp.ones_like(self.ts_action, dtype=jnp.float64)
         res_drive = self.a0 * real_action
         res_drive = self.drive_smoother(res_drive)
@@ -207,9 +227,11 @@ class BatchedPhotonLangevinReadoutEnv(SingleStepEnvironment):
         return max_photon
 
     def t1(self):
+        """Physics Specific Function"""
         return -2 / self._kappa * jnp.log(1.0 - 1 / self.mu)
 
     def t3(self):
+        """Physics Specific Function"""
         return -2 / self._kappa * jnp.log(self.mu / (1.0 + self.mu))
 
     def dummy_a3r_waveform(
@@ -218,6 +240,7 @@ class BatchedPhotonLangevinReadoutEnv(SingleStepEnvironment):
         t2: Optional[float] = None,
         t3: Optional[float] = None,
     ):
+        """Physics Specific Function"""
         if t1 is None:
             t1 = self.t1()
         if t2 is None:
@@ -239,6 +262,7 @@ class BatchedPhotonLangevinReadoutEnv(SingleStepEnvironment):
         return signal
 
     def get_baseline_smoothness(self):
+        """Physics Specific Function"""
         signal = self.dummy_a3r_waveform()
         smoothed_signal = self.drive_smoother(signal)
         smoothness = self.calculate_batch_smoothness(smoothed_signal)
@@ -247,9 +271,20 @@ class BatchedPhotonLangevinReadoutEnv(SingleStepEnvironment):
     def step_env(
         self, key: chex.PRNGKey, state: EnvState, action: chex.Array, params: EnvParams
     ) -> Tuple[chex.Array, EnvState, chex.Array, bool, dict]:
-        """Perform Single Episode State Transition"""
+        """
+        IMPORTANT Perform Single Episode State Transition
+        - key is for RNG, needs to be handled properly if used
+        - state is the input state, will be modified to produce new state
+        - action is an array corresponding to action space shape
+        - params is the appropriate Env Params, this argument shouldn't change during training runs
+
+        Returns Observation, New State, Reward, Dones Signal, and Info based on State
+        In this particular task, the observation is always fixed, and the Dones is
+        always True since its a single-step environment.
+        """
         new_timestep = state.timestep + 1
 
+        # Preparing Action for Simulation
         real_action = action[:, 0 : params.num_actions]
         res_drive = self.a0 * real_action.astype(jnp.float64)
         normalizing_factor = jnp.clip(
@@ -260,6 +295,7 @@ class BatchedPhotonLangevinReadoutEnv(SingleStepEnvironment):
         res_drive *= normalizing_factor
         res_drive = self.batched_smoother(res_drive)
 
+        # Simulation and Obtaining Reward + Params for New State
         batched_results = self.batched_results(res_drive)
         reward, updated_state_array = self.batched_reward_and_state(
             batched_results.astype(self.float_dtype), res_drive
@@ -268,9 +304,25 @@ class BatchedPhotonLangevinReadoutEnv(SingleStepEnvironment):
         new_max_action = res_drive[updated_state_array[-1].astype(jnp.int16)].astype(
             self.float_dtype
         )
+        # Setting New State with Updated State Array,
+        # New Optimal Action (for logging),
+        # and New Timestep
         updated_state = EnvState(
             *updated_state_array[:-1], new_max_action, new_timestep
         )
+        """
+        new_state_return and old_state_return functions are defined to replicate
+        if-else functionality for normal state updates. Here I want to retrieve 
+        the action that produces the max reward as well as the simulation 
+        results due to this action. 
+        
+        If the best action in the current batch has the highest reward, 
+        then new_state_return is called and the current state is returned.
+
+        If the old best action has a higher reward, then old_state_return is
+        called, so that the current mean batch statistics is updated, however
+        all other state variables are that of the old_state.
+        """
 
         def new_state_return(old_state: EnvState, new_state: EnvState) -> EnvState:
             return new_state
@@ -293,6 +345,7 @@ class BatchedPhotonLangevinReadoutEnv(SingleStepEnvironment):
             )
             return updated_old_state
 
+        # Condition on whether old_state_return or new_state_return is called
         condition = updated_state.max_batch_reward > state.max_batch_reward
         env_state = jax.lax.cond(
             condition,
@@ -300,7 +353,7 @@ class BatchedPhotonLangevinReadoutEnv(SingleStepEnvironment):
             old_state_return,
             state,
             updated_state,
-        )
+        )  # Using jax.lax.cond to obtain the if-else functionality
 
         done = True
         return (
@@ -312,10 +365,12 @@ class BatchedPhotonLangevinReadoutEnv(SingleStepEnvironment):
         )
 
     def drive_smoother(self, res_drive: chex.Array):
+        """Physics Specific Function"""
         params = self.default_params
         return jnp.convolve(res_drive, params.gauss_kernel, mode="same")
 
     def calculate_batch_smoothness(self, batched_action):
+        """Physics Specific Function"""
         ts = self.ts_action
         dx = 1.0
         b_first_deriv = jnp.diff(batched_action, axis=-1) / dx
@@ -324,6 +379,7 @@ class BatchedPhotonLangevinReadoutEnv(SingleStepEnvironment):
         return integral_val
 
     def get_bandwidth(self, batched_drive: chex.Array):
+        """Physics Specific Function"""
         params = self.default_params
         fft_vals = jnp.fft.fft(batched_drive, axis=-1)
         fft_shifted = jnp.abs(jnp.fft.fftshift(fft_vals))
@@ -341,6 +397,7 @@ class BatchedPhotonLangevinReadoutEnv(SingleStepEnvironment):
         return bandwidth
 
     def extract_values(self, b_results: chex.Array, b_actions: chex.Array):
+        """Physics Specific Function"""
         b_res_g = b_results[:, :, 0] + 1.0j * b_results[:, :, 1]
         b_res_e = b_results[:, :, 2] + 1.0j * b_results[:, :, 3]
         b_photon_g = jnp.abs(b_res_g) ** 2
@@ -409,6 +466,7 @@ class BatchedPhotonLangevinReadoutEnv(SingleStepEnvironment):
     def calc_results(
         self, res_drive: chex.Array
     ) -> Tuple[chex.Array, chex.Array, chex.Array, chex.Array, chex.Array]:
+        """Physics Specific Function, Function used for ODE Simulation"""
         params = self.default_params
         control = LinearInterpolation(ts=self.ts_action, ys=res_drive)
 
@@ -463,6 +521,7 @@ class BatchedPhotonLangevinReadoutEnv(SingleStepEnvironment):
         return sol.ys
 
     def precompile(self):
+        """Function called on initialisation to jit + vmap the relevant functions"""
         self.batched_results = jit(vmap(self.calc_results, in_axes=0))
         self.batched_reward_and_state = jit(self.calc_reward_and_state)
         self.batched_smoother = jit(vmap(self.drive_smoother, in_axes=0))
@@ -474,6 +533,7 @@ class BatchedPhotonLangevinReadoutEnv(SingleStepEnvironment):
         batched_results: chex.Array,
         batched_drives: chex.Array,
     ) -> Tuple[chex.Array, chex.Array]:
+        """Function holding Reward Calculation and State Param Calculations"""
         (
             max_pf,
             max_photons,
@@ -483,9 +543,10 @@ class BatchedPhotonLangevinReadoutEnv(SingleStepEnvironment):
             b_pf,
             b_higher_photons,
         ) = self.batched_extract_values(batched_results, batched_drives)
+        # The above function holds physics-specific details
 
         # Batched Reward is a function of:
-        # 1. Max pF During the Readout (use Absolute Values)
+        # 1. Max Negative Log Error During the Readout (use Absolute Values)
         # 2. Photon Reset Time
         # 3. Penalty Addition for max_photons (High RELU scaling)
         batched_reward = (
@@ -497,6 +558,8 @@ class BatchedPhotonLangevinReadoutEnv(SingleStepEnvironment):
             - self.order_penalty * (1.0 - jnp.sign(photon_reset_time - max_pf_times))
         )
 
+        # Below code is to retrieve mean params of the batch and the params
+        # corresponding to the max reward action (useful for info)
         max_reward = jnp.max(batched_reward)
         max_reward_index = jnp.argmax(max_reward)
 
@@ -536,7 +599,8 @@ class BatchedPhotonLangevinReadoutEnv(SingleStepEnvironment):
     def reset_env(
         self, key: chex.PRNGKey, params: EnvParams
     ) -> Tuple[chex.Array, EnvState]:
-        """Reset Environment, in this case nothing needs to be done so default obs and info are returned"""
+        """IMPORTANT Reset Environment, in this case nothing needs to be done
+        so default obs and info are returned"""
         # self.precompile()
         state = EnvState(
             mean_batch_reward=0.0,
@@ -556,9 +620,12 @@ class BatchedPhotonLangevinReadoutEnv(SingleStepEnvironment):
         return self.get_obs(params), state
 
     def get_obs(self, params: Optional[EnvParams] = EnvParams) -> chex.Array:
+        """IMPORTANT Function to get observation at a given state, as this is a single-step
+        episode environment, the observation can be left fixed"""
         return jnp.zeros((self._batchsize,), dtype=jnp.float64)
 
     def get_info(self, env_state: EnvState) -> dict:
+        """IMPORTANT Function to get info for a given input state"""
         return {
             "mean batch reward": env_state.mean_batch_reward,
             "mean batch pF": env_state.mean_batch_pF,
@@ -577,13 +644,16 @@ class BatchedPhotonLangevinReadoutEnv(SingleStepEnvironment):
 
     @property
     def name(self) -> str:
+        """IMPORTANT name of environment"""
         return "ResonatorReadoutEnv"
 
     @property
     def num_actions(self, params: Optional[EnvParams] = EnvParams) -> int:
+        """IMPORTANT number of actions"""
         return params.num_actions
 
     def action_space(self, params: Optional[EnvParams] = None) -> spaces.Box:
+        """IMPORTANT action space shape"""
         if params is None:
             params = self.default_params
 
@@ -595,9 +665,11 @@ class BatchedPhotonLangevinReadoutEnv(SingleStepEnvironment):
         )
 
     def observation_space(self, params: Optional[EnvParams] = None) -> spaces.Box:
+        """IMPORTANT observation space shape"""
         return spaces.Box(-1.0, 1.0, shape=(1,), dtype=jnp.float64)
 
     def state_space(self, params: EnvParams) -> spaces.Dict:
+        """IMPORTANT state space shape"""
         low = jnp.array(
             [
                 params.min_reward,
