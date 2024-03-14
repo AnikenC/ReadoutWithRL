@@ -94,7 +94,7 @@ class EnvParams:
 
     t0: Optional[float] = 0.0
 
-    num_actions: Optional[int] = 81
+    num_actions: Optional[int] = 121
     num_sim: Optional[int] = 361
 
     min_action: Optional[float] = -1.0
@@ -162,7 +162,7 @@ class BatchedPhotonLangevinReadoutEnv(SingleStepEnvironment):
         self._photon_gamma = photon_gamma
         self._gamma_I = gamma_I
         self.ts_sim = jnp.linspace(0.0, self._t1, 361, dtype=jnp.float64)
-        self.ts_action = jnp.linspace(0.0, self._t1, 81, dtype=jnp.float64)
+        self.ts_action = jnp.linspace(0.0, self._t1, 121, dtype=jnp.float64)
         self.float_dtype = jnp.float32
         self.complex_dtype = jnp.complex64
         self.saveat = SaveAt(ts=self.ts_sim)
@@ -301,8 +301,11 @@ class BatchedPhotonLangevinReadoutEnv(SingleStepEnvironment):
             batched_results.astype(self.float_dtype), res_drive
         )
 
-        new_max_action = res_drive[updated_state_array[-1].astype(jnp.int16)].astype(
-            self.float_dtype
+        new_max_action = (
+            res_drive[updated_state_array[-1].astype(jnp.int16)].astype(
+                self.float_dtype
+            )
+            * jnp.heaviside()
         )
         # Setting New State with Updated State Array,
         # New Optimal Action (for logging),
@@ -451,7 +454,10 @@ class BatchedPhotonLangevinReadoutEnv(SingleStepEnvironment):
         max_pf_times = self.ts_sim[jnp.argmax(b_pf, axis=-1)]
 
         b_actions_normed = b_actions / (self.mu * self.a0)
-        b_smoothness = self.batched_fast_smoothness_calc(b_actions_normed)
+        b_actions_clipped = b_actions_normed * jnp.heaviside(
+            photon_reset_time.reshape(-1, 1) - self.ts_sim.reshape(1, -1), 1.0
+        )
+        b_smoothness = self.batched_fast_smoothness_calc(b_actions_clipped)
 
         return (
             max_pf,

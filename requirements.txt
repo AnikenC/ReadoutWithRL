@@ -9,6 +9,7 @@ flax
 gymnax
 optax
 distrax
+evosax
 
 qiskit
 qiskit-dynamics
