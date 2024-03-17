@@ -457,6 +457,7 @@ class BatchedPhotonLangevinReadoutEnv(SingleStepEnvironment):
             max_pf,
             max_photons,
             photon_reset_time,
+            pulse_end_times,
             max_pf_times,
             b_smoothness,
             b_pf,
@@ -538,6 +539,7 @@ class BatchedPhotonLangevinReadoutEnv(SingleStepEnvironment):
             max_pf,
             max_photons,
             photon_reset_time,
+            pulse_end_times,
             max_pf_times,
             smoothness_vals,
             b_pf,
@@ -555,7 +557,7 @@ class BatchedPhotonLangevinReadoutEnv(SingleStepEnvironment):
             - self.smoothness_factor
             * relu((smoothness_vals / self.baseline_smoothness) - 1.0)
             - self.photon_penalty * relu((max_photons / self.actual_max_photons - 1.0))
-            - self.order_penalty * (1.0 - jnp.sign(photon_reset_time - max_pf_times))
+            - self.order_penalty * (1.0 - jnp.sign(pulse_end_times - max_pf_times))
         )
 
         # Below code is to retrieve mean params of the batch and the params
