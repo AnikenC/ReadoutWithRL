@@ -94,7 +94,7 @@ class EnvParams:
 
     t0: Optional[float] = 0.0
 
-    num_actions: Optional[int] = 81
+    num_actions: Optional[int] = 121
     num_sim: Optional[int] = 361
 
     min_action: Optional[float] = -1.0
@@ -162,7 +162,7 @@ class BatchedPhotonLangevinReadoutEnv(SingleStepEnvironment):
         self._photon_gamma = photon_gamma
         self._gamma_I = gamma_I
         self.ts_sim = jnp.linspace(0.0, self._t1, 361, dtype=jnp.float64)
-        self.ts_action = jnp.linspace(0.0, self._t1, 81, dtype=jnp.float64)
+        self.ts_action = jnp.linspace(0.0, self._t1, 121, dtype=jnp.float64)
         self.float_dtype = jnp.float32
         self.complex_dtype = jnp.complex64
         self.saveat = SaveAt(ts=self.ts_sim)
@@ -427,17 +427,9 @@ class BatchedPhotonLangevinReadoutEnv(SingleStepEnvironment):
         )
         min_photons_times = self.ts_sim[min_photons_ind]
 
-        b_resetting_photons = b_higher_photons
-
         b_higher_photons += self.photon_limit * jnp.heaviside(
             self.ts_sim.reshape(1, -1) - min_photons_times.reshape(-1, 1), 0.0
         )
-
-        b_resetting_photons -= self.photon_limit * jnp.heaviside(
-            -self.ts_sim.reshape(1, -1) + min_photons_times.reshape(-1, 1), 0.0
-        )
-
-        max_reset_photons = jnp.max(b_resetting_photons)
 
         closest_time_to_reset_ind = (
             jnp.argmin(
@@ -445,17 +437,25 @@ class BatchedPhotonLangevinReadoutEnv(SingleStepEnvironment):
             )
             + self.ind
         )
+        closest_time_to_reset_action_ind = (
+            closest_time_to_reset_ind
+            / (len(self.ts_sim) - 1)
+            * (len(self.ts_action) - 1)
+        )
+        closest_time_to_reset_action_ind = closest_time_to_reset_action_ind.astype(
+            jnp.int32
+        )
         pulse_end_times = self.ts_sim[closest_time_to_reset_ind]
+        pulse_reset_vals = (
+            b_actions[jnp.arange(self._batchsize), closest_time_to_reset_action_ind]
+            / self.a0
+            / self.mu
+        )
+        pulse_reset_vals = jnp.abs(pulse_reset_vals)
+
         pulse_reset_photons = b_higher_photons[
             jnp.arange(self._batchsize), closest_time_to_reset_ind
         ]
-
-        diff_photons_time = (
-            self.photon_weight
-            * self._tau
-            * jnp.log(max_reset_photons / self._ideal_photon)
-        )
-        diff_photons_time = jnp.clip(diff_photons_time, a_min=0.0, a_max=None)
 
         photon_reset_time = pulse_end_times + self.photon_weight * self._tau * jnp.log(
             pulse_reset_photons / self._ideal_photon
@@ -480,7 +480,7 @@ class BatchedPhotonLangevinReadoutEnv(SingleStepEnvironment):
             b_smoothness,
             b_pf,
             b_higher_photons,
-            diff_photons_time,
+            pulse_reset_vals,
         )
 
     def calc_results(
@@ -563,7 +563,7 @@ class BatchedPhotonLangevinReadoutEnv(SingleStepEnvironment):
             smoothness_vals,
             b_pf,
             b_higher_photons,
-            diff_photons_time,
+            pulse_reset_vals,
         ) = self.batched_extract_values(batched_results, batched_drives)
         # The above function holds physics-specific details
 
@@ -578,7 +578,7 @@ class BatchedPhotonLangevinReadoutEnv(SingleStepEnvironment):
             * relu((smoothness_vals / self.baseline_smoothness) - 1.0)
             - self.photon_penalty * relu((max_photons / self.actual_max_photons - 1.0))
             - self.order_penalty * (1.0 - jnp.sign(pulse_end_times - max_pf_times))
-            - self.time_factor * diff_photons_time
+            - 10.0 * pulse_reset_vals
         )
 
         # Below code is to retrieve mean params of the batch and the params
