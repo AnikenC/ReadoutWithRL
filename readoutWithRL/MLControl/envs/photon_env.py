@@ -193,7 +193,7 @@ class BatchedPhotonLangevinReadoutEnv(SingleStepEnvironment):
         self.smoothness_factor = smoothness_coeff
         self.photon_penalty = 100.0
         self.order_penalty = 100.0
-        self.reset_photon_penalty = 10.0
+        self.amp_penalty = 10.0
         self.actual_max_photons = n0 * (
             1.0
             - 2.0 * jnp.exp(-0.5 * kappa * tau_0) * jnp.cos(0.5 * chi * tau_0)
@@ -452,6 +452,7 @@ class BatchedPhotonLangevinReadoutEnv(SingleStepEnvironment):
             / self.mu
         )
         pulse_reset_vals = jnp.abs(pulse_reset_vals)
+        pulse_reset_vals = pulse_reset_vals + jnp.abs(b_actions[:, 0])
 
         pulse_reset_photons = b_higher_photons[
             jnp.arange(self._batchsize), closest_time_to_reset_ind
@@ -578,7 +579,7 @@ class BatchedPhotonLangevinReadoutEnv(SingleStepEnvironment):
             * relu((smoothness_vals / self.baseline_smoothness) - 1.0)
             - self.photon_penalty * relu((max_photons / self.actual_max_photons - 1.0))
             - self.order_penalty * (1.0 - jnp.sign(pulse_end_times - max_pf_times))
-            - 10.0 * pulse_reset_vals
+            - self.amp_penalty * pulse_reset_vals
         )
 
         # Below code is to retrieve mean params of the batch and the params
