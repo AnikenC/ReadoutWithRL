@@ -1,4 +1,5 @@
 matplotlib
+pandas
 pylatexenc
 
 jax>=0.4.9
