@@ -41,11 +41,11 @@ class EnvState:
     All relevant params that get updated each step should be stored here
     """
 
-    mean_reward: float
-    mean_pF: float
-    mean_photon: float
-    mean_photon_time: float
-    mean_smoothness: float
+    reward: float
+    max_pf: float
+    max_photon: float
+    photon_time: float
+    smoothness: float
     timestep: int
 
 
@@ -58,7 +58,6 @@ class EnvParams:
     """
 
     args: chex.Array
-    batchsize: int
     t1: float
     ideal_photon: float
 
@@ -290,54 +289,7 @@ class SinglePhotonLangevinReadoutEnv(SingleStepEnvironment):
             single_result.astype(self.float_dtype), res_drive
         )
 
-        # Setting New State with Updated State Array,
-        # New Optimal Action (for logging),
-        # and New Timestep
-        updated_state = EnvState(*updated_state_array[:-1], new_timestep)
-        """
-        new_state_return and old_state_return functions are defined to replicate
-        if-else functionality for normal state updates. Here I want to retrieve 
-        the action that produces the max reward as well as the simulation 
-        results due to this action. 
-        
-        If the best action in the current batch has the highest reward, 
-        then new_state_return is called and the current state is returned.
-
-        If the old best action has a higher reward, then old_state_return is
-        called, so that the current mean batch statistics is updated, however
-        all other state variables are that of the old_state.
-        """
-
-        def new_state_return(old_state: EnvState, new_state: EnvState) -> EnvState:
-            return new_state
-
-        def old_state_return(old_state: EnvState, new_state: EnvState) -> EnvState:
-            updated_old_state = EnvState(
-                mean_batch_reward=new_state.mean_batch_reward,
-                mean_batch_pF=new_state.mean_batch_pF,
-                mean_batch_photon=new_state.mean_batch_photon,
-                mean_batch_photon_time=new_state.mean_batch_photon_time,
-                mean_batch_smoothness=new_state.mean_batch_smoothness,
-                max_batch_reward=old_state.max_batch_reward,
-                pF_at_max=old_state.pF_at_max,
-                photon_at_max=old_state.photon_at_max,
-                photon_time=old_state.photon_time,
-                smoothness_at_max=old_state.smoothness_at_max,
-                std_batch_reward=new_state.std_batch_reward,
-                action_of_max=old_state.action_of_max,
-                timestep=new_state.timestep,
-            )
-            return updated_old_state
-
-        # Condition on whether old_state_return or new_state_return is called
-        condition = updated_state.max_batch_reward > state.max_batch_reward
-        env_state = jax.lax.cond(
-            condition,
-            new_state_return,
-            old_state_return,
-            state,
-            updated_state,
-        )  # Using jax.lax.cond to obtain the if-else functionality
+        env_state = EnvState(*updated_state_array, new_timestep)
 
         done = True
         return (
@@ -352,6 +304,15 @@ class SinglePhotonLangevinReadoutEnv(SingleStepEnvironment):
         """Physics Specific Function"""
         params = self.default_params
         return jnp.convolve(res_drive, params.gauss_kernel, mode="same")
+
+    def calculate_smoothness(self, action):
+        """Physics Specific Function"""
+        ts = self.ts_action
+        dx = 1.0
+        first_deriv = jnp.diff(action) / dx
+        second_deriv = jnp.diff(first_deriv) / dx
+        integral_val = trapezoid(y=second_deriv**2, x=ts[2:])
+        return integral_val
 
     def calculate_batch_smoothness(self, batched_action):
         """Physics Specific Function"""
@@ -389,7 +350,8 @@ class SinglePhotonLangevinReadoutEnv(SingleStepEnvironment):
         photon_e = jnp.abs(res_e) ** 2
 
         decay_g = -(self._gamma_I + self._photon_gamma * photon_g[1:].T) * self.dt
-        decay_g = jnp.vstack((jnp.ones(1), decay_g))
+        decay_g = jnp.concatenate((jnp.ones(1), decay_g))
+        # decay_g = jnp.vstack((jnp.ones(1), decay_g))
         decay_g = self._init_fid * jnp.cumsum(decay_g, axis=0).T
 
         photons_combined = jnp.concatenate(
@@ -408,7 +370,9 @@ class SinglePhotonLangevinReadoutEnv(SingleStepEnvironment):
             self.ts_sim - min_photon_time, 0.0
         )
         closest_time_to_reset_ind = (
-            jnp.argmin(jnp.abs(higher_photons[self.ind :] - self.ideal_photon), axis=-1)
+            jnp.argmin(
+                jnp.abs(higher_photons[self.ind :] - self._ideal_photon), axis=-1
+            )
             + self.ind
         )
         closest_time_to_reset_action_ind = (
@@ -427,36 +391,28 @@ class SinglePhotonLangevinReadoutEnv(SingleStepEnvironment):
         )
         pulse_reset_val /= self.a0 * self.mu
 
-        pulse_reset_photon = 
-
-        pulse_reset_photons = b_higher_photons[
-            jnp.arange(self._batchsize), closest_time_to_reset_ind
-        ]
-
-        photon_reset_time = pulse_end_times + self.photon_weight * self._tau * jnp.log(
-            pulse_reset_photons / self._ideal_photon
+        pulse_reset_photon = higher_photons[closest_time_to_reset_ind]
+        photon_reset_time = pulse_end_time + self.photon_weight * self._tau * jnp.log(
+            pulse_reset_photon / self._ideal_photon
         )
-        photon_reset_time = jnp.clip(photon_reset_time, a_min=pulse_end_times)
+        photon_reset_time = jnp.clip(photon_reset_time, a_min=pulse_end_time)
 
-        b_pf *= jnp.heaviside(
-            photon_reset_time.reshape(-1, 1) - self.ts_sim.reshape(1, -1), 1.0
-        )
-        max_pf = jnp.max(b_pf, axis=-1)
-        max_pf_times = self.ts_sim[jnp.argmax(b_pf, axis=-1)]
+        max_pf = jnp.max(pf)
+        max_pf_time = self.ts_sim[jnp.argmax(pf)]
 
-        b_actions_normed = b_actions / (self.mu * self.a0)
-        b_smoothness = self.batched_fast_smoothness_calc(b_actions_normed)
+        action_normed = action / (self.mu * self.a0)
+        smoothness = self.fast_smoothness_calc(action_normed)
 
         return (
             max_pf,
             max_photons,
             photon_reset_time,
-            pulse_end_times,
-            max_pf_times,
-            b_smoothness,
-            b_pf,
-            b_higher_photons,
-            pulse_reset_vals,
+            pulse_end_time,
+            max_pf_time,
+            smoothness,
+            pf,
+            higher_photons,
+            pulse_reset_val,
         )
 
     def calc_results(
@@ -523,6 +479,7 @@ class SinglePhotonLangevinReadoutEnv(SingleStepEnvironment):
         self.batched_smoother = jit(vmap(self.drive_smoother, in_axes=0))
         self.batched_extract_values = jit(self.extract_values)
         self.batched_fast_smoothness_calc = jit(self.calculate_batch_smoothness)
+        self.fast_smoothness_calc = jit(self.calculate_smoothness)
 
     def calc_reward_and_state(
         self,
@@ -532,14 +489,14 @@ class SinglePhotonLangevinReadoutEnv(SingleStepEnvironment):
         """Function holding Reward Calculation and State Param Calculations"""
         (
             max_pf,
-            max_photons,
+            max_photon,
             photon_reset_time,
-            pulse_end_times,
-            max_pf_times,
-            smoothness_vals,
-            b_pf,
-            b_higher_photons,
-            pulse_reset_vals,
+            pulse_end_time,
+            max_pf_time,
+            smoothness,
+            _,
+            _,
+            pulse_reset_val,
         ) = self.extract_values(result, res_drive)
         # The above function holds physics-specific details
 
@@ -547,53 +504,28 @@ class SinglePhotonLangevinReadoutEnv(SingleStepEnvironment):
         # 1. Max Negative Log Error During the Readout (use Absolute Values)
         # 2. Photon Reset Time
         # 3. Penalty Addition for max_photons (High RELU scaling)
-        batched_reward = (
+
+        reward = (
             self.pF_factor * max_pf
             - self.time_factor * photon_reset_time
-            - self.smoothness_factor
-            * relu((smoothness_vals / self.baseline_smoothness) - 1.0)
-            - self.photon_penalty * relu((max_photons / self.actual_max_photons - 1.0))
-            - self.order_penalty * (1.0 - jnp.sign(pulse_end_times - max_pf_times))
-            - self.amp_penalty * pulse_reset_vals
+            - self.smoothness_factor * relu(smoothness / self.baseline_smoothness - 1.0)
+            - self.photon_penalty * relu(max_photon / self.actual_max_photons - 1.0)
+            - self.order_penalty * (1.0 - jnp.sign(pulse_end_time - max_pf_time))
+            - self.amp_penalty * pulse_reset_val
         )
-
-        # Below code is to retrieve mean params of the batch and the params
-        # corresponding to the max reward action (useful for info)
-        max_reward = jnp.max(batched_reward)
-        max_reward_index = jnp.argmax(max_reward)
-
-        pF_at_max = max_pf[max_reward_index]
-        photon_at_max = max_photons[max_reward_index]
-        photon_reset_time_at_max = photon_reset_time[max_reward_index]
-        smoothness_at_max = smoothness_vals[max_reward_index]
-
-        mean_batch_reward = jnp.mean(batched_reward)
-        mean_max_photon = jnp.mean(max_photons)
-        mean_batch_pF = jnp.mean(max_pf)
-        mean_batch_photon_time = jnp.mean(photon_reset_time)
-        mean_smoothness = jnp.mean(smoothness_at_max)
-
-        std_batch_reward = jnp.std(batched_reward)
 
         state = jnp.array(
             [
-                mean_batch_reward,
-                mean_batch_pF,
-                mean_max_photon,
-                mean_batch_photon_time,
-                mean_smoothness,
-                max_reward,
-                pF_at_max,
-                photon_at_max,
-                photon_reset_time_at_max,
-                smoothness_at_max,
-                std_batch_reward,
-                max_reward_index,
+                reward,
+                max_pf,
+                max_photon,
+                photon_reset_time,
+                smoothness,
             ],
             dtype=jnp.float64,
         )
 
-        return (batched_reward, state)
+        return (reward, state)
 
     def reset_env(
         self, key: chex.PRNGKey, params: EnvParams
@@ -602,18 +534,11 @@ class SinglePhotonLangevinReadoutEnv(SingleStepEnvironment):
         so default obs and info are returned"""
         # self.precompile()
         state = EnvState(
-            mean_batch_reward=0.0,
-            mean_batch_pF=0.0,
-            mean_batch_photon=0.0,
-            mean_batch_photon_time=0.0,
-            mean_batch_smoothness=0.0,
-            max_batch_reward=-1e5,
-            pF_at_max=0.0,
-            photon_at_max=0.0,
-            photon_time=0.1,
-            smoothness_at_max=0.0,
-            std_batch_reward=1.0,
-            action_of_max=jnp.zeros((params.num_actions,), dtype=self.float_dtype),
+            reward=0.0,
+            max_pf=0.0,
+            max_photon=0.0,
+            photon_time=0.0,
+            smoothness=0.0,
             timestep=0,
         )
         return self.get_obs(params), state
@@ -621,23 +546,16 @@ class SinglePhotonLangevinReadoutEnv(SingleStepEnvironment):
     def get_obs(self, params: Optional[EnvParams] = EnvParams) -> chex.Array:
         """IMPORTANT Function to get observation at a given state, as this is a single-step
         episode environment, the observation can be left fixed"""
-        return jnp.zeros((self._batchsize,), dtype=jnp.float64)
+        return jnp.zeros((1,), dtype=jnp.float64)
 
     def get_info(self, env_state: EnvState) -> dict:
         """IMPORTANT Function to get info for a given input state"""
         return {
-            "mean batch reward": env_state.mean_batch_reward,
-            "mean batch pF": env_state.mean_batch_pF,
-            "mean batch photon": env_state.mean_batch_photon,
-            "mean batch photon time": env_state.mean_batch_photon_time,
-            "mean batch smoothness": env_state.mean_batch_smoothness,
-            "max reward obtained": env_state.max_batch_reward,
-            "pF at max": env_state.pF_at_max,
-            "photon at max": env_state.photon_at_max,
-            "photon time of max": env_state.photon_time,
-            "smoothness at max": env_state.smoothness_at_max,
-            "std batch reward": env_state.std_batch_reward,
-            "action of max": env_state.action_of_max,
+            "reward": env_state.reward,
+            "max pF": env_state.max_pf,
+            "max photon": env_state.max_photon,
+            "photon time": env_state.photon_time,
+            "smoothness": env_state.smoothness,
             "timestep": env_state.timestep,
         }
 
@@ -695,7 +613,7 @@ class SinglePhotonLangevinReadoutEnv(SingleStepEnvironment):
                 params.max_smoothness,
                 params.max_bandwidth,
                 self._t1,
-                self._batchsize,
+                1.0,
             ],
             dtype=jnp.float64,
         )
