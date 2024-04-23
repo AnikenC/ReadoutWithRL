@@ -46,6 +46,7 @@ class EnvState:
     max_photon: float
     photon_time: float
     smoothness: float
+    action: chex.Array
     timestep: int
 
 
@@ -256,6 +257,17 @@ class SinglePhotonLangevinReadoutEnv(SingleStepEnvironment):
         smoothed_signal = self.drive_smoother(signal)
         smoothness = self.calculate_batch_smoothness(smoothed_signal)
         return smoothness
+    
+    def prepare_action(self, action):
+        res_drive = self.a0 * action.astype(jnp.float64)
+        normalizing_factor = jnp.clip(
+            self.mu * self.a0 / jnp.absolute(res_drive),
+            0.0,
+            1.0,
+        )
+        res_drive *= normalizing_factor
+        res_drive = self.drive_smoother(res_drive)
+        return res_drive
 
     def step_env(
         self, key: chex.PRNGKey, state: EnvState, action: chex.Array, params: EnvParams
@@ -274,14 +286,7 @@ class SinglePhotonLangevinReadoutEnv(SingleStepEnvironment):
         new_timestep = state.timestep + 1
 
         # Preparing Action for Simulation
-        res_drive = self.a0 * action.astype(jnp.float64)
-        normalizing_factor = jnp.clip(
-            self.mu * self.a0 / jnp.absolute(res_drive),
-            0.0,
-            1.0,
-        )
-        res_drive *= normalizing_factor
-        res_drive = self.drive_smoother(res_drive)
+        res_drive = self.prepare_action(action)
 
         # Simulation and Obtaining Reward + Params for New State
         single_result = self.calc_results(res_drive)
@@ -289,7 +294,7 @@ class SinglePhotonLangevinReadoutEnv(SingleStepEnvironment):
             single_result.astype(self.float_dtype), res_drive
         )
 
-        env_state = EnvState(*updated_state_array, new_timestep)
+        env_state = EnvState(*updated_state_array, action, new_timestep)
 
         done = True
         return (
@@ -526,6 +531,124 @@ class SinglePhotonLangevinReadoutEnv(SingleStepEnvironment):
         )
 
         return (reward, state)
+    
+    def rollout_action(self, raw_action: chex.Array):
+        ts_sim = self.ts_sim
+        ts_action = self.ts_action
+
+        fig, ax = plt.subplots(3, figsize=(8.0, 16.0))
+
+        # Obtaining Raw Action vs Smooth Action
+        raw_action *= self.a0
+        normalizing_factor = jnp.clip(
+            self.mu * self.a0 / jnp.absolute(raw_action),
+            0.0,
+            1.0,
+        )
+        raw_action *= normalizing_factor
+        smooth_action = self.drive_smoother(raw_action)
+
+        # Defining Default Gaussian Square Readout
+        # Gaussian Edge with sigma and duration
+        # Constant Amplitude for certain duration
+        total_default_duration = 0.398
+        gaussian_edge_sigma = 64 / 4.5 / 1000.
+        gaussian_edge_duration = 2. * gaussian_edge_sigma
+        gaussian_square_readout = self.a0 * jnp.heaviside(ts_action - gaussian_edge_duration, 0.)
+        gaussian_square_readout *= jnp.heaviside(total_default_duration - gaussian_edge_duration - ts_action, 1.)
+        gaussian_square_readout += self.a0 * jnp.exp(-(ts_action - gaussian_edge_duration)**2 / (2 * gaussian_edge_sigma**2)) * jnp.heaviside(gaussian_edge_duration - ts_action, 1.)
+        gaussian_square_readout += self.a0 * jnp.exp(-(ts_action - (total_default_duration - gaussian_edge_duration))**2 / (2 * gaussian_edge_sigma**2)) * jnp.heaviside(gaussian_edge_duration - ts_action, 1.)
+
+        # Obtaining Results for Smooth Action and Gaussian Square
+        smooth_results = self.calc_results(smooth_action)
+        (
+            s_max_pf,
+            s_max_photon,
+            s_photon_reset_time,
+            s_pulse_end_time,
+            s_max_pf_time,
+            s_smoothness,
+            s_pF,
+            s_higher_photons,
+            s_pulse_reset_val,
+        ) = self.extract_values(smooth_results, smooth_action)
+
+        s_photon_reset_time = jnp.round(s_photon_reset_time, 3)
+        s_pulse_end_time = jnp.round(s_pulse_end_time, 3)
+        s_max_pf_time = jnp.round(s_max_pf_time, 3)
+
+        gaussian_results = self.calc_results(gaussian_square_readout)
+        (
+            g_max_pf,
+            g_max_photon,
+            g_photon_reset_time,
+            g_pulse_end_time,
+            g_max_pf_time,
+            g_smoothness,
+            g_pF,
+            g_higher_photons,
+            g_pulse_reset_val,
+        ) = self.extract_values(gaussian_results, gaussian_square_readout)
+
+        g_photon_reset_time = jnp.round(g_photon_reset_time, 3)
+        g_pulse_end_time = jnp.round(g_pulse_end_time, 3)
+        g_max_pf_time = jnp.round(g_max_pf_time, 3)
+
+        smooth_g = smooth_results[:, 0] + 1.0j * smooth_results[:, 1]
+        smooth_e = smooth_results[:, 2] + 1.0j * smooth_results[:, 3]
+        gaussian_g = gaussian_results[:, 0] + 1.0j * gaussian_results[:, 1]
+        gaussian_e = gaussian_results[:, 2] + 1.0j * gaussian_results[:, 3]
+
+        g_higher_photons = jnp.abs(gaussian_g) ** 2
+
+        ax[0].plot(ts_action, raw_action, label='Raw Action', alpha=0.5)
+        ax[0].plot(ts_action, smooth_action, label='Smooth Action')
+        ax[0].plot(ts_action, gaussian_square_readout, label='Default Gaussian Square')
+        ax[0].axvline(x=s_max_pf_time, color='green', linestyle='dashed', label=f'Smooth Max pF Time: {s_max_pf_time}us')
+        ax[0].axvline(x=s_photon_reset_time, color='red', linestyle='dashed', label=f'Smooth Reset Time: {s_photon_reset_time}us')
+        ax[0].set_xlabel('Time (us)')
+        ax[0].set_ylabel('Amp (A.U.)')
+        ax[0].legend()
+
+        ax[1].plot(ts_sim, s_pF, label='Smooth pF')
+        ax[1].plot(ts_sim, g_pF, label='Gaussian Square pF')
+        ax[1].axvline(x=s_max_pf_time, color='green', linestyle='dashed', label=f'Smooth Max pF Time: {s_max_pf_time}us')
+        ax[1].axvline(x=g_max_pf_time, color='purple', linestyle='dashed', label=f'Gaussian Max pF Time: {g_max_pf_time}us')
+        ax[1].axvline(x=s_photon_reset_time, color='red', linestyle='dashed', label=f'Smooth Reset Time: {s_photon_reset_time}us')
+        ax[1].set_xlabel('Time (us)')
+        ax[1].set_ylabel('Negative Log Error (pF)')
+        ax[1].legend()
+
+        ax[2].plot(ts_sim, s_higher_photons, label='Smooth Photons')
+        ax[2].plot(ts_sim, g_higher_photons, label='Gaussian Square Photons')
+        ax[2].axvline(x=s_max_pf_time, color='green', linestyle='dashed', label=f'Smooth Max pF Time: {s_max_pf_time}us')
+        ax[2].axvline(x=g_max_pf_time, color='purple', linestyle='dashed', label=f'Gaussian Max pF Time: {g_max_pf_time}us')
+        ax[2].axvline(x=s_photon_reset_time, color='red', linestyle='dashed', label=f'Smooth Reset Time: {s_photon_reset_time}us')
+        ax[2].set_xlabel('Time (us)')
+        ax[2].set_ylabel('Photons')
+        # ax[2].set_yscale('log')
+        ax[2].set_ylim(bottom=1e-3)
+        ax[2].legend()
+
+        plt.figure(figsize=(8.0, 5.0))
+
+        s_max_pf_index = jnp.argmin(jnp.abs(ts_sim - s_max_pf_time))
+        g_max_pf_index = jnp.argmin(jnp.abs(ts_sim - g_max_pf_time))
+        s_pulse_end_index = jnp.argmin(jnp.abs(ts_sim - s_pulse_end_time))
+
+        plt.plot(smooth_g.real, smooth_g.imag, label='Smooth G')
+        plt.plot(smooth_e.real, smooth_e.imag, label='Smooth E')
+        plt.plot(gaussian_g.real, gaussian_g.imag, label='Gaussian G')
+        plt.plot(gaussian_e.real, gaussian_e.imag, label='Gaussian E')
+        plt.scatter(smooth_g[s_max_pf_index].real, smooth_g[s_max_pf_index].imag, label=f'Smooth G Max Pf time: {s_max_pf_time}us')
+        plt.scatter(smooth_e[s_max_pf_index].real, smooth_e[s_max_pf_index].imag, label=f'Smooth E Max Pf time: {s_max_pf_time}us')
+        plt.scatter(smooth_g[s_pulse_end_index].real, smooth_g[s_pulse_end_index].imag, label=f'Smooth G End time: {s_pulse_end_time}us')
+        plt.scatter(smooth_e[s_pulse_end_index].real, smooth_e[s_pulse_end_index].imag, label=f'Smooth E End time: {s_pulse_end_time}us')
+        plt.scatter(gaussian_g[g_max_pf_index].real, gaussian_g[g_max_pf_index].imag, label=f'Gaussian G Max Pf time: {g_max_pf_time}us')
+        plt.scatter(gaussian_e[g_max_pf_index].real, gaussian_e[g_max_pf_index].imag, label=f'Gaussian E Max Pf time: {g_max_pf_time}us')
+        plt.legend(bbox_to_anchor=(1. ,1.))
+
+        plt.show()
 
     def reset_env(
         self, key: chex.PRNGKey, params: EnvParams
@@ -539,6 +662,7 @@ class SinglePhotonLangevinReadoutEnv(SingleStepEnvironment):
             max_photon=0.0,
             photon_time=0.0,
             smoothness=0.0,
+            action=jnp.zeros_like(self.ts_action),
             timestep=0,
         )
         return self.get_obs(params), state
@@ -556,6 +680,7 @@ class SinglePhotonLangevinReadoutEnv(SingleStepEnvironment):
             "max photon": env_state.max_photon,
             "photon time": env_state.photon_time,
             "smoothness": env_state.smoothness,
+            "action": env_state.action,
             "timestep": env_state.timestep,
         }
 
