@@ -13,6 +13,7 @@ import chex
 from rl_algos.rl_wrappers import VecEnv
 
 from envs.photon_env import BatchedPhotonLangevinReadoutEnv
+from envs.single_photon_env import SinglePhotonLangevinReadoutEnv
 
 import time
 
@@ -145,7 +146,10 @@ def PPO_make_train(config):
         )
         return config["LR"] * frac
 
-    envs_class_dict = {"photon_langevin_readout_env": BatchedPhotonLangevinReadoutEnv}
+    envs_class_dict = {
+        "photon_langevin_readout_env": BatchedPhotonLangevinReadoutEnv,
+        "single_langevin_env": SinglePhotonLangevinReadoutEnv,
+    }
     env_class = envs_class_dict[config["ENV_NAME"]]
     env_params = None
 
@@ -178,7 +182,7 @@ def PPO_make_train(config):
         num_t1: float,
         init_fid: float,
         photon_weight: float,
-        batchsize: int,
+        # batchsize: int,
         num_envs: int,
     ):
         """
@@ -189,7 +193,7 @@ def PPO_make_train(config):
         env = env_class(
             kappa=kappa,
             chi=chi,
-            batchsize=batchsize,
+            # batchsize=batchsize,
             kerr=kerr,
             time_coeff=time_coeff,
             snr_coeff=snr_coeff,
@@ -213,9 +217,7 @@ def PPO_make_train(config):
             layer_size=config["LAYER_SIZE"],
         )
         rng, _rng = jax.random.split(rng)
-        init_x = jnp.zeros(
-            (num_envs, batchsize) + env.observation_space(env_params).shape
-        )
+        init_x = jnp.zeros(env.observation_space(env_params).shape)
         network_params = network.init(_rng, init_x)
         train_state = TrainState.create(
             apply_fn=network.apply,
@@ -226,7 +228,7 @@ def PPO_make_train(config):
         # INIT ENV
         rng, _rng = jax.random.split(rng)
         reset_rng = jax.random.split(_rng, num_envs)
-        _, env_state = env.reset(reset_rng, env_params)
+        obsv, env_state = env.reset(reset_rng, env_params)
 
         # We only use init_x as the batched observation, and env_state for state information
 
@@ -312,14 +314,14 @@ def PPO_make_train(config):
 
                 train_state, traj_batch, advantages, targets, rng = update_state
                 rng, _rng = jax.random.split(rng)
-                batch_size = num_envs * batchsize
+                batch_size = num_envs
                 assert (
                     batch_size == config["NUM_STEPS"] * config["NUM_ENVS"]
                 ), "batch size must be equal to number of steps * number of envs"
                 permutation = jax.random.permutation(_rng, batch_size)
                 batch = (traj_batch, advantages, targets)
                 batch = jax.tree_util.tree_map(
-                    lambda x: x.reshape((batch_size,) + x.shape[2:]), batch
+                    lambda x: x.reshape((batch_size,) + x.shape[1:]), batch
                 )
                 shuffled_batch = jax.tree_util.tree_map(
                     lambda x: jnp.take(x, permutation, axis=0), batch
@@ -354,41 +356,18 @@ def PPO_make_train(config):
 
                 def return_readout_stats(global_updatestep, info):
                     jax.debug.print("global update: {update}", update=global_updatestep)
+                    jax.debug.print("reward: {reward}", reward=jnp.mean(info["reward"]))
+                    jax.debug.print("max pF: {pF}", pF=jnp.mean(info["max pF"]))
                     jax.debug.print(
-                        "mean batch reward: {reward}", reward=info["mean batch reward"]
-                    )
-                    jax.debug.print("mean batch pF: {pF}", pF=info["mean batch pF"])
-                    jax.debug.print(
-                        "mean batch photon: {photon}", photon=info["mean batch photon"]
+                        "max photon: {photon}", photon=jnp.mean(info["max photon"])
                     )
                     jax.debug.print(
-                        "mean batch photon time: {time}",
-                        time=info["mean batch photon time"],
+                        "photon time: {time}",
+                        time=jnp.mean(info["photon time"]),
                     )
                     jax.debug.print(
-                        "mean batch smoothness: {smoothness}",
-                        smoothness=info["mean batch smoothness"],
-                    )
-
-                    jax.debug.print(
-                        "max reward obtained: {reward}",
-                        reward=info["max reward obtained"],
-                    )
-                    jax.debug.print("pF at max: {pF}", pF=info["pF at max"])
-                    jax.debug.print(
-                        "photon at max: {photon}", photon=info["photon at max"]
-                    )
-                    jax.debug.print(
-                        "photon time of max: {time}", time=info["photon time of max"]
-                    )
-                    jax.debug.print(
-                        "smoothness at max: {smoothness}",
-                        smoothness=info["smoothness at max"],
-                    )
-
-                    jax.debug.print(
-                        "std batch reward: {std}",
-                        std=info["std batch reward"],
+                        "smoothness: {smoothness}",
+                        smoothness=jnp.mean(info["smoothness"]),
                     )
 
                 def pass_stats(global_updatestep, info):
@@ -420,7 +399,7 @@ def PPO_make_train(config):
             return runner_state, metric
 
         rng, _rng = jax.random.split(rng)
-        runner_state = (train_state, env_state, init_x, _rng)
+        runner_state = (train_state, env_state, obsv, _rng)
         runner_state, metric = jax.lax.scan(
             _update_step, runner_state, None, config["NUM_UPDATES"]
         )
@@ -435,8 +414,8 @@ if __name__ == "__main__":
     num_updates = 2500
     config = {
         "LR": 3e-3,
-        "NUM_ENVS": num_envs,
-        "NUM_STEPS": batchsize,
+        "NUM_ENVS": num_envs * batchsize,
+        "NUM_STEPS": 1,
         "NUM_UPDATES": num_updates,
         "UPDATE_EPOCHS": 4,
         "NUM_MINIBATCHES": int(batchsize * num_envs / 64),
@@ -447,7 +426,7 @@ if __name__ == "__main__":
         "MAX_GRAD_NORM": 0.5,
         "ACTIVATION": "relu6",
         "LAYER_SIZE": 256,
-        "ENV_NAME": "photon_langevin_readout_env",
+        "ENV_NAME": "single_langevin_env",
         "ANNEAL_LR": False,
         "DEBUG": True,
         "DEBUG_ACTION": False,
@@ -500,7 +479,7 @@ if __name__ == "__main__":
         num_t1,
         photon_gamma,
         init_fid,
-        batchsize,
+        # batchsize,
         num_envs,
     )
     print(f"time taken: {time.time() - start}")
