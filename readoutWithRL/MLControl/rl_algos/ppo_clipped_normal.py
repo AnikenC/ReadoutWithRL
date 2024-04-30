@@ -30,6 +30,8 @@ class SeparateActorCritic(nn.Module):
     action_dim: Sequence[int]
     activation: str = "tanh"
     layer_size: int = 128
+    min_action: float = -1.0
+    max_action: float = 1.0
 
     @nn.compact
     def __call__(self, x):
@@ -57,7 +59,13 @@ class SeparateActorCritic(nn.Module):
             self.action_dim, kernel_init=orthogonal(0.01), bias_init=constant(0.0)
         )(actor_mean)
         actor_logtstd = self.param("log_std", nn.initializers.zeros, (self.action_dim,))
-        pi = distrax.MultivariateNormalDiag(actor_mean, jnp.exp(actor_logtstd))
+        # pi = distrax.MultivariateNormalDiag(actor_mean, jnp.exp(actor_logtstd))
+        pi = distrax.ClippedNormal(
+            actor_mean,
+            jnp.exp(actor_logtstd),
+            minimum=self.min_action,
+            maximum=self.max_action,
+        )
 
         critic = nn.Dense(
             self.layer_size, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0)
@@ -82,6 +90,8 @@ class CombinedActorCritic(nn.Module):
     action_dim: Sequence[int]
     activation: str = "tanh"
     layer_size: int = 128
+    min_action: float = -1.0
+    max_action: float = 1.0
 
     @nn.compact
     def __call__(self, x):
@@ -109,7 +119,13 @@ class CombinedActorCritic(nn.Module):
             self.action_dim, kernel_init=orthogonal(0.01), bias_init=constant(0.0)
         )(actor_mean)
         actor_logtstd = self.param("log_std", nn.initializers.zeros, (self.action_dim,))
-        pi = distrax.MultivariateNormalDiag(actor_mean_val, jnp.exp(actor_logtstd))
+        # pi = distrax.MultivariateNormalDiag(actor_mean_val, jnp.exp(actor_logtstd))
+        pi = distrax.ClippedNormal(
+            actor_mean_val,
+            jnp.exp(actor_logtstd),
+            minimum=self.min_action,
+            maximum=self.max_action,
+        )
 
         critic = nn.Dense(1, kernel_init=orthogonal(1.0), bias_init=constant(0.0))(
             actor_mean
@@ -165,6 +181,8 @@ def PPO_make_train(config):
             optax.adam(config["LR"], eps=1e-5),
         )
 
+    assert config["ENT_COEF"] == 0.0, "Entropy not supported, set value to 0."
+
     def train(
         rng: chex.PRNGKey,
         num_envs: int,
@@ -177,6 +195,8 @@ def PPO_make_train(config):
             env.action_space(env_params).shape[0],
             activation=config["ACTIVATION"],
             layer_size=config["LAYER_SIZE"],
+            min_action=env.action_space(env_params).low,
+            max_action=env.action_space(env_params).high,
         )
         rng, _rng = jax.random.split(rng)
         init_x = jnp.zeros(env.observation_space(env_params).shape)
@@ -204,6 +224,7 @@ def PPO_make_train(config):
             pi, batched_value = network.apply(train_state.params, batched_last_obs)
             batched_action = pi.sample(seed=_rng)
             batched_log_prob = pi.log_prob(batched_action)
+            batched_log_prob = jnp.sum(batched_log_prob, axis=1)
 
             # STEP BATCHED ENV
             rng, _rng = jax.random.split(rng)
@@ -233,6 +254,7 @@ def PPO_make_train(config):
                         # RERUN NETWORK
                         pi, value = network.apply(params, traj_batch.obs)
                         log_prob = pi.log_prob(traj_batch.action)
+                        log_prob = jnp.sum(log_prob, axis=1)
 
                         # CALCULATE VALUE LOSS
                         value_pred_clipped = traj_batch.value + (
@@ -258,7 +280,8 @@ def PPO_make_train(config):
                         )
                         loss_actor = -jnp.minimum(loss_actor1, loss_actor2)
                         loss_actor = loss_actor.mean()
-                        entropy = pi.entropy().mean()
+                        # entropy = pi.entropy().mean()
+                        entropy = jnp.zeros_like(loss_actor)
 
                         total_loss = (
                             loss_actor
@@ -330,6 +353,10 @@ def PPO_make_train(config):
                     jax.debug.print(
                         "smoothness: {smoothness}",
                         smoothness=jnp.mean(info["smoothness"]),
+                    )
+                    jax.debug.print(
+                        "bandwidth: {bandwidth}",
+                        bandwidth=jnp.mean(info["bandwidth"]),
                     )
 
                 def pass_stats(global_updatestep, info):

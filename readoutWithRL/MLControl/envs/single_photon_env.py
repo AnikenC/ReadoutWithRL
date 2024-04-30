@@ -14,6 +14,7 @@ from jax import lax, config, vmap, jit
 from jax.scipy.special import erf
 from jax.scipy.integrate import trapezoid
 from jax.nn import relu
+from jax.numpy.fft import fft, fftfreq, ifft, fftshift
 from gymnax.environments import spaces
 from typing import Tuple, Optional
 import chex
@@ -46,6 +47,7 @@ class EnvState:
     max_photon: float
     photon_time: float
     smoothness: float
+    bandwidth: float
     action: chex.Array
     timestep: int
 
@@ -74,6 +76,7 @@ class EnvParams:
         / (jnp.sqrt(2 * jnp.pi) * gauss_std)
         * jnp.exp(-((small_window - gauss_mean) ** 2) / (2 * gauss_std**2))
     )
+    dirac_delta_kernel: Optional[chex.Array] = jnp.ones(1)
 
     photon_penalty: Optional[float] = 50.0
     bandwidth_penalty: Optional[float] = 5.0
@@ -130,6 +133,12 @@ class SinglePhotonLangevinReadoutEnv(SingleStepEnvironment):
         time_coeff: Optional[float] = 10.0,
         snr_coeff: Optional[float] = 10.0,
         smoothness_coeff: Optional[float] = 10.0,
+        smoothness_baseline_scale: Optional[float] = 1.0,
+        apply_smoothing: Optional[bool] = False,
+        bandwidth: Optional[float] = 50.0,
+        freq_relative_cutoff: Optional[float] = 0.001,
+        bandwidth_coeff: Optional[float] = 10.0,
+        apply_bandwidth_constraint: Optional[bool] = True,
         n0: Optional[float] = 30.0,
         tau_0: Optional[float] = 0.398,
         res_amp_scaling: Optional[float] = 2.3,
@@ -169,9 +178,18 @@ class SinglePhotonLangevinReadoutEnv(SingleStepEnvironment):
         self.photon_uncertainty = 0.5
         self.mu = res_amp_scaling
         self.min_acq_time = 0.032
+        params = self.default_params
+
+        self.bandwidth = bandwidth
+        self.apply_bandwidth_constraint = apply_bandwidth_constraint
+
         self.precompile()
+        self.kernel = params.gauss_kernel
         self.photon_limit = self.determine_max_photon()
         self.baseline_smoothness = self.get_baseline_smoothness()
+        if not apply_smoothing:
+            self.kernel = params.dirac_delta_kernel
+
         self.freqs_shifted = jnp.fft.fftshift(
             jnp.fft.fftfreq(n=len(self.ts_action), d=self._t1 / len(self.ts_action))
             * self._tau
@@ -181,6 +199,8 @@ class SinglePhotonLangevinReadoutEnv(SingleStepEnvironment):
         self.pF_factor = snr_coeff
         self.time_factor = time_coeff
         self.smoothness_factor = smoothness_coeff
+        self.bandwidth_factor = bandwidth_coeff
+        self.freq_relative_cutoff = freq_relative_cutoff
         self.photon_penalty = 100.0
         self.order_penalty = 100.0
         self.amp_penalty = 10.0
@@ -191,6 +211,8 @@ class SinglePhotonLangevinReadoutEnv(SingleStepEnvironment):
         )
         self.photon_weight = photon_weight
         self.dt = self._t1 / len(self.ts_sim - 1)
+
+        self.smoothness_baseline_scale = smoothness_baseline_scale
 
     @property
     def default_params(self) -> EnvParams:
@@ -204,6 +226,8 @@ class SinglePhotonLangevinReadoutEnv(SingleStepEnvironment):
             ),
             t1=self._t1,
             ideal_photon=self._ideal_photon,
+            min_action=-self.mu,
+            max_action=self.mu,
         )
 
     def determine_max_photon(self):
@@ -259,14 +283,15 @@ class SinglePhotonLangevinReadoutEnv(SingleStepEnvironment):
         return smoothness
 
     def prepare_action(self, action):
-        res_drive = self.a0 * action.astype(jnp.float64)
+        res_drive = self.a0 * action.astype(jnp.float64)  # Scale up Action
+        res_drive = self.drive_smoother(res_drive)  # Apply Smoother
+        res_drive = self.bandwidth_constrainer(res_drive)  # Apply Bandwidth Constraints
         normalizing_factor = jnp.clip(
             self.mu * self.a0 / jnp.absolute(res_drive),
             0.0,
             1.0,
         )
-        res_drive *= normalizing_factor
-        res_drive = self.drive_smoother(res_drive)
+        res_drive *= normalizing_factor  # Clip Pulse Amplitude
         return res_drive
 
     def step_env(
@@ -291,7 +316,7 @@ class SinglePhotonLangevinReadoutEnv(SingleStepEnvironment):
         # Simulation and Obtaining Reward + Params for New State
         single_result = self.calc_results(res_drive)
         reward, updated_state_array = self.calc_reward_and_state(
-            single_result.astype(self.float_dtype), res_drive
+            single_result.astype(self.float_dtype), res_drive, action
         )
 
         env_state = EnvState(*updated_state_array, action, new_timestep)
@@ -307,8 +332,20 @@ class SinglePhotonLangevinReadoutEnv(SingleStepEnvironment):
 
     def drive_smoother(self, res_drive: chex.Array):
         """Physics Specific Function"""
-        params = self.default_params
-        return jnp.convolve(res_drive, params.gauss_kernel, mode="same")
+        conv_result = jnp.convolve(res_drive, self.kernel, mode="same")
+        return conv_result
+
+    def bandwidth_constrainer(self, res_drive: chex.Array):
+        """Physics Specific Function"""
+        if not self.apply_bandwidth_constraint:
+            return res_drive
+        freqs = fftfreq(n=self.num_actions, d=self.ts_action[1] - self.ts_action[0])
+        fft_action = fft(res_drive)
+        bandwidth_constraint = jnp.heaviside(self.bandwidth - jnp.abs(freqs), 1.0)
+        fft_action_transformed = fft_action * bandwidth_constraint
+
+        action_transformed = ifft(fft_action_transformed)
+        return action_transformed.real
 
     def calculate_smoothness(self, action):
         """Physics Specific Function"""
@@ -318,6 +355,24 @@ class SinglePhotonLangevinReadoutEnv(SingleStepEnvironment):
         second_deriv = jnp.diff(first_deriv) / dx
         integral_val = trapezoid(y=second_deriv**2, x=ts[2:])
         return integral_val
+
+    def calculate_bandwidth(self, action):
+        freqs = fftfreq(n=self.num_actions, d=self.ts_action[1] - self.ts_action[0])
+        fft_action = fft(action)
+        mag_fft_action = jnp.abs(fft_action)
+        max_mag = jnp.max(mag_fft_action)
+
+        freqs_shift = fftshift(freqs)
+        mag_fft_action_shift = fftshift(mag_fft_action)
+        bandwidth = jnp.abs(
+            freqs_shift[
+                jnp.where(
+                    mag_fft_action_shift > self.freq_relative_cutoff * max_mag, size=1
+                )[0][0]
+            ]
+        )
+
+        return bandwidth
 
     def calculate_batch_smoothness(self, batched_action):
         """Physics Specific Function"""
@@ -346,7 +401,9 @@ class SinglePhotonLangevinReadoutEnv(SingleStepEnvironment):
         )
         return bandwidth
 
-    def extract_values(self, results: chex.Array, action: chex.Array):
+    def extract_values(
+        self, results: chex.Array, processed_action: chex.Array, raw_action: chex.Array
+    ):
         """Physics Specific Function"""
         res_g = results[:, 0] + 1.0j * results[:, 1]
         res_e = results[:, 2] + 1.0j * results[:, 3]
@@ -391,9 +448,9 @@ class SinglePhotonLangevinReadoutEnv(SingleStepEnvironment):
         )
 
         pulse_end_time = self.ts_sim[closest_time_to_reset_ind]
-        pulse_reset_val = jnp.abs(action[closest_time_to_reset_action_ind]) + jnp.abs(
-            action[0]
-        )
+        pulse_reset_val = jnp.abs(
+            processed_action[closest_time_to_reset_action_ind]
+        ) + jnp.abs(processed_action[0])
         pulse_reset_val /= self.a0 * self.mu
 
         pulse_reset_photon = higher_photons[closest_time_to_reset_ind]
@@ -405,8 +462,9 @@ class SinglePhotonLangevinReadoutEnv(SingleStepEnvironment):
         max_pf = jnp.max(pf)
         max_pf_time = self.ts_sim[jnp.argmax(pf)]
 
-        action_normed = action / (self.mu * self.a0)
+        action_normed = processed_action / (self.mu * self.a0)
         smoothness = self.fast_smoothness_calc(action_normed)
+        bandwidth = self.calculate_bandwidth(self.a0 * raw_action)
 
         return (
             max_pf,
@@ -415,6 +473,7 @@ class SinglePhotonLangevinReadoutEnv(SingleStepEnvironment):
             pulse_end_time,
             max_pf_time,
             smoothness,
+            bandwidth,
             pf,
             higher_photons,
             pulse_reset_val,
@@ -487,9 +546,7 @@ class SinglePhotonLangevinReadoutEnv(SingleStepEnvironment):
         self.fast_smoothness_calc = jit(self.calculate_smoothness)
 
     def calc_reward_and_state(
-        self,
-        result: chex.Array,
-        res_drive: chex.Array,
+        self, result: chex.Array, res_drive: chex.Array, action: chex.Array
     ) -> Tuple[chex.Array, chex.Array]:
         """Function holding Reward Calculation and State Param Calculations"""
         (
@@ -499,10 +556,11 @@ class SinglePhotonLangevinReadoutEnv(SingleStepEnvironment):
             pulse_end_time,
             max_pf_time,
             smoothness,
+            bandwidth,
             _,
             _,
             pulse_reset_val,
-        ) = self.extract_values(result, res_drive)
+        ) = self.extract_values(result, res_drive, action)
         # The above function holds physics-specific details
 
         # Batched Reward is a function of:
@@ -513,20 +571,19 @@ class SinglePhotonLangevinReadoutEnv(SingleStepEnvironment):
         reward = (
             self.pF_factor * max_pf
             - self.time_factor * photon_reset_time
-            - self.smoothness_factor * relu(smoothness / self.baseline_smoothness - 1.0)
+            - self.smoothness_factor
+            * relu(
+                smoothness / (self.smoothness_baseline_scale * self.baseline_smoothness)
+                - 1.0
+            )
+            - self.bandwidth_factor * relu(bandwidth / self.bandwidth - 1.0)
             - self.photon_penalty * relu(max_photon / self.actual_max_photons - 1.0)
             - self.order_penalty * (1.0 - jnp.sign(pulse_end_time - max_pf_time))
             - self.amp_penalty * pulse_reset_val
         )
 
         state = jnp.array(
-            [
-                reward,
-                max_pf,
-                max_photon,
-                photon_reset_time,
-                smoothness,
-            ],
+            [reward, max_pf, max_photon, photon_reset_time, smoothness, bandwidth],
             dtype=jnp.float64,
         )
 
@@ -534,7 +591,7 @@ class SinglePhotonLangevinReadoutEnv(SingleStepEnvironment):
 
     def rollout_action(
         self,
-        raw_action: chex.Array,
+        action: chex.Array,
         time_below_photon_val: Optional[float] = 0.1,
         photon_log_scale: Optional[bool] = False,
     ):
@@ -544,14 +601,14 @@ class SinglePhotonLangevinReadoutEnv(SingleStepEnvironment):
         fig, ax = plt.subplots(3, figsize=(8.0, 16.0))
 
         # Obtaining Raw Action vs Smooth Action
-        raw_action *= self.a0
+        raw_action = action * self.a0
         normalizing_factor = jnp.clip(
             self.mu * self.a0 / jnp.absolute(raw_action),
             0.0,
             1.0,
         )
         raw_action *= normalizing_factor
-        smooth_action = self.drive_smoother(raw_action)
+        smooth_action = self.prepare_action(action)
 
         # Defining Default Gaussian Square Readout
         # Gaussian Edge with sigma and duration
@@ -591,10 +648,11 @@ class SinglePhotonLangevinReadoutEnv(SingleStepEnvironment):
             s_pulse_end_time,
             s_max_pf_time,
             s_smoothness,
+            s_bandwidth,
             s_pF,
             s_higher_photons,
             s_pulse_reset_val,
-        ) = self.extract_values(smooth_results, smooth_action)
+        ) = self.extract_values(smooth_results, smooth_action, action)
 
         s_photon_reset_time = jnp.round(s_photon_reset_time, 3)
         s_pulse_end_time = jnp.round(s_pulse_end_time, 3)
@@ -608,10 +666,13 @@ class SinglePhotonLangevinReadoutEnv(SingleStepEnvironment):
             g_pulse_end_time,
             g_max_pf_time,
             g_smoothness,
+            g_bandwidth,
             g_pF,
             g_higher_photons,
             g_pulse_reset_val,
-        ) = self.extract_values(gaussian_results, gaussian_square_readout)
+        ) = self.extract_values(
+            gaussian_results, gaussian_square_readout, gaussian_square_readout / self.a0
+        )
 
         g_photon_reset_time = jnp.round(g_photon_reset_time, 3)
         g_pulse_end_time = jnp.round(g_pulse_end_time, 3)
@@ -768,6 +829,7 @@ class SinglePhotonLangevinReadoutEnv(SingleStepEnvironment):
             max_photon=0.0,
             photon_time=0.0,
             smoothness=0.0,
+            bandwidth=0.0,
             action=jnp.zeros_like(self.ts_action),
             timestep=0,
         )
@@ -786,6 +848,7 @@ class SinglePhotonLangevinReadoutEnv(SingleStepEnvironment):
             "max photon": env_state.max_photon,
             "photon time": env_state.photon_time,
             "smoothness": env_state.smoothness,
+            "bandwidth": env_state.bandwidth,
             "action": env_state.action,
             "timestep": env_state.timestep,
         }

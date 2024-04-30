@@ -19,8 +19,6 @@ import time
 
 import matplotlib.pyplot as plt
 
-from utils import photon_env_dicts
-
 
 class SeparateActorCritic(nn.Module):
     """
@@ -57,7 +55,7 @@ class SeparateActorCritic(nn.Module):
             self.action_dim, kernel_init=orthogonal(0.01), bias_init=constant(0.0)
         )(actor_mean)
         actor_logtstd = self.param("log_std", nn.initializers.zeros, (self.action_dim,))
-        pi = distrax.MultivariateNormalDiag(actor_mean, jnp.exp(actor_logtstd))
+        pi = distrax.Beta(jnp.exp(actor_alphas), jnp.exp(actor_betas))
 
         critic = nn.Dense(
             self.layer_size, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0)
@@ -136,10 +134,6 @@ def PPO_make_train(config):
     """
     Function that returns a trainable function for an input configuration dictionary
     """
-    env_dict = photon_env_dicts()
-    env = env_dict[config["ENV_NAME"]](**config["ENV_PARAMS"])
-    env = VecEnv(env)
-
     config["MINIBATCH_SIZE"] = (
         config["NUM_ENVS"] * config["NUM_STEPS"] // config["NUM_MINIBATCHES"]
     )
@@ -152,6 +146,11 @@ def PPO_make_train(config):
         )
         return config["LR"] * frac
 
+    envs_class_dict = {
+        "photon_langevin_readout_env": BatchedPhotonLangevinReadoutEnv,
+        "single_langevin_env": SinglePhotonLangevinReadoutEnv,
+    }
+    env_class = envs_class_dict[config["ENV_NAME"]]
     env_params = None
 
     if config["ANNEAL_LR"]:
@@ -167,11 +166,52 @@ def PPO_make_train(config):
 
     def train(
         rng: chex.PRNGKey,
+        kappa: float,
+        chi: float,
+        kerr: float,
+        time_coeff: float,
+        snr_coeff: float,
+        smoothness_coeff: float,
+        smoothness_baseline_scale: float,
+        n0: float,
+        tau_0: float,
+        res_amp_scaling: float,
+        nR: float,
+        snr_scale_factor: float,
+        gamma_I: float,
+        photon_gamma: float,
+        num_t1: float,
+        init_fid: float,
+        photon_weight: float,
+        # batchsize: int,
         num_envs: int,
     ):
         """
         Training function for environment
         """
+
+        # MAKE CUSTOM ENV
+        env = env_class(
+            kappa=kappa,
+            chi=chi,
+            # batchsize=batchsize,
+            kerr=kerr,
+            time_coeff=time_coeff,
+            snr_coeff=snr_coeff,
+            smoothness_coeff=smoothness_coeff,
+            smoothness_baseline_scale=smoothness_baseline_scale,
+            n0=n0,
+            tau_0=tau_0,
+            res_amp_scaling=res_amp_scaling,
+            nR=nR,
+            snr_scale_factor=snr_scale_factor,
+            gamma_I=gamma_I,
+            photon_gamma=photon_gamma,
+            num_t1=num_t1,
+            init_fid=init_fid,
+            photon_weight=photon_weight,
+        )
+        env = VecEnv(env)
         # INIT NETWORK
         network = CombinedActorCritic(
             env.action_space(env_params).shape[0],
