@@ -462,8 +462,7 @@ class SinglePhotonLangevinReadoutEnv(SingleStepEnvironment):
         max_pf = jnp.max(pf)
         max_pf_time = self.ts_sim[jnp.argmax(pf)]
 
-        action_normed = processed_action / (self.mu * self.a0)
-        smoothness = self.fast_smoothness_calc(action_normed)
+        smoothness = self.fast_smoothness_calc(raw_action / self.mu)
         bandwidth = self.calculate_bandwidth(self.a0 * raw_action)
 
         return (
