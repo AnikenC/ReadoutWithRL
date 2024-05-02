@@ -21,6 +21,28 @@ import matplotlib.pyplot as plt
 
 from utils import photon_env_dicts
 
+from jax.numpy.fft import rfft, irfft
+
+
+class FFTConv1D(nn.Module):
+
+    @nn.compact
+    def __call__(self, x):
+        # Compute Fourier coefficients
+        x_ft = rfft(x, axis=1)
+
+        num_x = x.shape[1]
+        num_x_ft_modes = x_ft.shape[1]
+
+        weights1 = self.param("weights1", nn.initializers.ones_init(), (1, num_x_ft_modes))
+
+        # Multiply relevant Fourier modes
+        out_ft = x_ft * weights1
+
+        x = irfft(out_ft, n=num_x, axis=1)
+
+        return x
+
 
 class SeparateActorCritic(nn.Module):
     """
@@ -89,7 +111,6 @@ class CombinedActorCritic(nn.Module):
     action_dim: Sequence[int]
     activation: str = "tanh"
     layer_size: int = 128
-    kernel_size: int = 5
     min_action: float = -1.0
     max_action: float = 1.0
 
@@ -120,17 +141,13 @@ class CombinedActorCritic(nn.Module):
             self.action_dim, kernel_init=orthogonal(0.01), bias_init=constant(0.0)
         )(actor_mean)
 
-        actor_mean_val = actor_mean_val.reshape(-1, self.action_dim, 1)
+        actor_mean_val = actor_mean_val.reshape(-1, self.action_dim)
 
-        conv_actor_mean_val = nn.Conv(
-            features=1, kernel_size=(self.kernel_size,), padding="SAME"
-        )(actor_mean_val)
-
-        conv_actor_mean_val = actor_mean_val.reshape(-1, self.action_dim)
+        fft_conv_actor_mean_val = FFTConv1D()(actor_mean_val)
 
         actor_logtstd = self.param("log_std", nn.initializers.zeros, (self.action_dim,))
         pi = distrax.ClippedNormal(
-            conv_actor_mean_val,
+            fft_conv_actor_mean_val,
             jnp.exp(actor_logtstd),
             minimum=self.min_action,
             maximum=self.max_action,
@@ -204,7 +221,7 @@ def PPO_make_train(config):
             env.action_space(env_params).shape[0],
             activation=config["ACTIVATION"],
             layer_size=config["LAYER_SIZE"],
-            kernel_size=config["KERNEL_SIZE"],
+            # kernel_size=config["KERNEL_SIZE"],
             min_action=env.action_space(env_params).low,
             max_action=env.action_space(env_params).high,
         )

@@ -569,13 +569,16 @@ class SinglePhotonLangevinReadoutEnv(SingleStepEnvironment):
 
         reward = (
             self.pF_factor * max_pf
-            - self.time_factor * photon_reset_time
+            - self.time_factor * (photon_reset_time + 1) ** 2
             - self.smoothness_factor
             * relu(
                 smoothness / (self.smoothness_baseline_scale * self.baseline_smoothness)
                 - 1.0
             )
-            - self.bandwidth_factor * relu(bandwidth / self.bandwidth - 1.0)
+            ** 2  # Squared for Stronger Gradients
+            - self.bandwidth_factor
+            * (relu(bandwidth / self.bandwidth - 1.0))
+            ** 2  # Squared for Stronger Gradients
             - self.photon_penalty * relu(max_photon / self.actual_max_photons - 1.0)
             - self.order_penalty * (1.0 - jnp.sign(pulse_end_time - max_pf_time))
             - self.amp_penalty * pulse_reset_val
