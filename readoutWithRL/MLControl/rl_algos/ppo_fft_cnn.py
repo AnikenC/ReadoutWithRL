@@ -34,7 +34,9 @@ class FFTConv1D(nn.Module):
         num_x = x.shape[1]
         num_x_ft_modes = x_ft.shape[1]
 
-        weights1 = self.param("weights1", nn.initializers.ones_init(), (1, num_x_ft_modes))
+        weights1 = self.param(
+            "weights1", nn.initializers.ones_init(), (1, num_x_ft_modes)
+        )
 
         # Multiply relevant Fourier modes
         out_ft = x_ft * weights1
@@ -368,22 +370,28 @@ def PPO_make_train(config):
 
                 def return_readout_stats(global_updatestep, info):
                     jax.debug.print("global update: {update}", update=global_updatestep)
-                    jax.debug.print("reward: {reward}", reward=jnp.mean(info["reward"]))
-                    jax.debug.print("max pF: {pF}", pF=jnp.mean(info["max pF"]))
                     jax.debug.print(
-                        "max photon: {photon}", photon=jnp.mean(info["max photon"])
+                        "reward: {reward}",
+                        reward=jnp.round(jnp.mean(info["reward"]), 3),
+                    )
+                    jax.debug.print(
+                        "max pF: {pF}", pF=jnp.round(jnp.mean(info["max pF"]), 3)
+                    )
+                    jax.debug.print(
+                        "max photon: {photon}",
+                        photon=jnp.round(jnp.mean(info["max photon"]), 3),
                     )
                     jax.debug.print(
                         "photon time: {time}",
-                        time=jnp.mean(info["photon time"]),
+                        time=jnp.round(jnp.mean(info["photon time"]), 4),
                     )
                     jax.debug.print(
                         "smoothness: {smoothness}",
-                        smoothness=jnp.mean(info["smoothness"]),
+                        smoothness=jnp.round(jnp.mean(info["smoothness"]), 6),
                     )
                     jax.debug.print(
                         "bandwidth: {bandwidth}",
-                        bandwidth=jnp.mean(info["bandwidth"]),
+                        bandwidth=jnp.round(jnp.mean(info["bandwidth"]), 3),
                     )
 
                 def pass_stats(global_updatestep, info):

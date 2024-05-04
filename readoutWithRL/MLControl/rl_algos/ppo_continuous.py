@@ -205,7 +205,6 @@ def PPO_make_train(config):
             batched_action = pi.sample(seed=_rng)
             batched_log_prob = pi.log_prob(batched_action)
 
-            # STEP BATCHED ENV
             rng, _rng = jax.random.split(rng)
             rng_step = jax.random.split(_rng, num_envs)
             returned_obsv, env_state, batched_reward, done, batch_info = env.step(
@@ -318,18 +317,28 @@ def PPO_make_train(config):
 
                 def return_readout_stats(global_updatestep, info):
                     jax.debug.print("global update: {update}", update=global_updatestep)
-                    jax.debug.print("reward: {reward}", reward=jnp.mean(info["reward"]))
-                    jax.debug.print("max pF: {pF}", pF=jnp.mean(info["max pF"]))
                     jax.debug.print(
-                        "max photon: {photon}", photon=jnp.mean(info["max photon"])
+                        "reward: {reward}",
+                        reward=jnp.round(jnp.mean(info["reward"]), 3),
+                    )
+                    jax.debug.print(
+                        "max pF: {pF}", pF=jnp.round(jnp.mean(info["max pF"]), 3)
+                    )
+                    jax.debug.print(
+                        "max photon: {photon}",
+                        photon=jnp.round(jnp.mean(info["max photon"]), 3),
                     )
                     jax.debug.print(
                         "photon time: {time}",
-                        time=jnp.mean(info["photon time"]),
+                        time=jnp.round(jnp.mean(info["photon time"]), 4),
                     )
                     jax.debug.print(
                         "smoothness: {smoothness}",
-                        smoothness=jnp.mean(info["smoothness"]),
+                        smoothness=jnp.round(jnp.mean(info["smoothness"]), 6),
+                    )
+                    jax.debug.print(
+                        "bandwidth: {bandwidth}",
+                        bandwidth=jnp.round(jnp.mean(info["bandwidth"]), 3),
                     )
 
                 def pass_stats(global_updatestep, info):
