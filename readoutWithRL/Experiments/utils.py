@@ -169,7 +169,7 @@ def fit_gaussian_with_offset(x_values, y_values, init_params):
     return params, fit_res
 
 
-def acquisition_checker(job: list):
+def acquisition_checker(job: list, backend):
     acq_duration_list = []
     all_duration_list = []
     for schedule in job:
@@ -184,7 +184,9 @@ def acquisition_checker(job: list):
     acq_duration_array = np.array(acq_duration_list)
     all_duration_array = np.array(all_duration_list)
 
-    if not (all_duration_array % 16 == 0).all():
+    alignment_context = backend.configuration().timing_constraints["pulse_alignment"]
+
+    if not (all_duration_array % alignment_context == 0).all():
         raise ValueError(
             "At least one Delay or Play Instruction has a duration that is not divisible by 16"
         )
@@ -200,7 +202,7 @@ def acquisition_checker(job: list):
     if not (acq_duration_array == acq_duration_array[0]).all():
         raise ValueError("All Acquisition Durations are not identical")
 
-    if acq_duration_array[0] % 16 != 0:
+    if acq_duration_array[0] % alignment_context != 0:
         raise ValueError(
             "All Acquisition Durations must be positive integer multiples of 16"
         )
