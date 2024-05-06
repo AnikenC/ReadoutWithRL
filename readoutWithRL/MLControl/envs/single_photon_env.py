@@ -220,6 +220,7 @@ class SinglePhotonLangevinReadoutEnv(SingleStepEnvironment):
         self.standard_fid = standard_fid
         self.shot_noise_std = shot_noise_std
         self.use_processed_action = use_processed_action
+        self.tau_0 = tau_0
 
     @property
     def default_params(self) -> EnvParams:
@@ -647,6 +648,7 @@ class SinglePhotonLangevinReadoutEnv(SingleStepEnvironment):
         action: chex.Array,
         time_below_photon_val: Optional[float] = 0.1,
         photon_log_scale: Optional[bool] = False,
+        bound_plots: Optional[bool] = True,
     ):
         rng, _rng = jax.random.split(key)
         ts_sim = self.ts_sim
@@ -667,8 +669,9 @@ class SinglePhotonLangevinReadoutEnv(SingleStepEnvironment):
         # Defining Default Gaussian Square Readout
         # Gaussian Edge with sigma and duration
         # Constant Amplitude for certain duration
-        total_default_duration = 0.398
-        gaussian_edge_sigma = 64 / 4.5 / 1000.0
+        total_default_duration = self.tau_0
+        dt = 0.00045
+        gaussian_edge_sigma = 64 * dt
         gaussian_edge_duration = 2.0 * gaussian_edge_sigma
         gaussian_square_readout = self.a0 * jnp.heaviside(
             ts_action - gaussian_edge_duration, 0.0
@@ -742,7 +745,13 @@ class SinglePhotonLangevinReadoutEnv(SingleStepEnvironment):
         gaussian_g = gaussian_results[:, 0] + 1.0j * gaussian_results[:, 1]
         gaussian_e = gaussian_results[:, 2] + 1.0j * gaussian_results[:, 3]
 
+        s_higher_photons = jnp.abs(smooth_g) ** 2
         g_higher_photons = jnp.abs(gaussian_g) ** 2
+
+        if bound_plots:
+            ax[0].set_xlim(left=None, right=self._t1)
+            ax[1].set_xlim(left=None, right=self._t1)
+            ax[2].set_xlim(left=None, right=self._t1)
 
         ax[0].plot(ts_action, raw_action, label="Raw Action", alpha=0.5)
         ax[0].plot(ts_action, smooth_action, label="Smooth Action")
@@ -764,8 +773,8 @@ class SinglePhotonLangevinReadoutEnv(SingleStepEnvironment):
         ax[0].set_title("Pulse Waveforms")
         ax[0].legend()
 
-        ax[1].plot(ts_sim, s_pF, label="Smooth pF")
-        ax[1].plot(ts_sim, g_pF, label="Gaussian Square pF")
+        ax[1].plot(ts_sim, s_pF, label=f"Smooth pF max: {jnp.round(s_max_pf, 3)}")
+        ax[1].plot(ts_sim, g_pF, label=f"Gaussian Square pF: {jnp.round(g_max_pf, 3)}")
         ax[1].axvline(
             x=s_max_pf_time,
             color="green",
