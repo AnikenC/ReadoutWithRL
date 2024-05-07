@@ -34,6 +34,8 @@ class StandardAcqScanExp:
         acq_end_dt: int,
         num_acq_exp: int,
         acq_meas_dur_dt: int,
+        meas_amp: Optional[float] = None,
+        meas_duration_dt: Optional[int] = None,
     ):
         super().__init__()
         self.qubit = qubit
@@ -45,6 +47,23 @@ class StandardAcqScanExp:
 
         self.x_pulse = single_q_dict["x pulse"]
         self.meas_pulse = single_q_dict["meas pulse"]
+
+        self.meas_duration_dt = meas_duration_dt
+        if meas_duration_dt is None:
+            self.meas_duration_dt = self.meas_pulse.duration
+
+        self.meas_amp = meas_amp
+        if meas_amp is None:
+            self.meas_amp = self.meas_pulse.amp
+
+        self.meas_pulse = pulse.GaussianSquare(
+            duration=self.meas_duration_dt,
+            amp=self.meas_amp,
+            sigma=self.meas_pulse.sigma,
+            width=self.meas_duration_dt - 4 * self.meas_pulse.sigma,
+            angle=self.meas_pulse.angle,
+        )
+
         self.meas_delay_dur = single_q_dict["meas delay"].duration
         self.acq_delay_linspace_ns = np.linspace(
             acq_start_dt * self.dt, acq_end_dt * self.dt, num_acq_exp
