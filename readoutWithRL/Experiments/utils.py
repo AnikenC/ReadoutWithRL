@@ -51,6 +51,28 @@ def classify_results(res_array, mean_g, mean_e):
     return prob_0_arr, prob_1_arr
 
 
+def get_corrected_means(array_g, array_e):
+    """
+    Array inputs need to be of shape (num_exp, num_shots)
+    """
+    mean_res_g = np.mean(array_g, axis=-1)
+    mean_res_e = np.mean(array_e, axis=-1)
+
+    angle_dev = (
+        0.5 * (np.unwrap(np.angle(mean_res_g)) + np.unwrap(np.angle(mean_res_e)))
+        - 0.5 * np.pi
+    )
+    angle_dev = angle_dev.reshape(-1, 1)
+
+    new_res_g = array_g * np.exp(-1.0j * angle_dev)
+    new_res_e = array_e * np.exp(-1.0j * angle_dev)
+
+    new_means_g = np.mean(new_res_g, axis=-1)
+    new_means_e = np.mean(new_res_e, axis=-1)
+
+    return new_means_g, new_means_e
+
+
 def get_fidelity(array_g, array_e):
     """
     Array inputs need to be of shape (num_exp, num_shots)
