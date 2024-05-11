@@ -16,3 +16,6 @@ evosax
 qiskit
 qiskit-dynamics
 qiskit-ibmq-provider
+
+scipy
+scikit-learn
