@@ -207,7 +207,7 @@ class SinglePhotonLangevinReadoutEnv(SingleStepEnvironment):
         self.freq_relative_cutoff = freq_relative_cutoff
         self.photon_penalty = 100.0
         self.order_penalty = 100.0
-        self.amp_penalty = 10.0
+        self.amp_penalty = 50.0
         self.actual_max_photons = n0 * (
             1.0
             - 2.0 * jnp.exp(-0.5 * kappa * tau_0) * jnp.cos(0.5 * chi * tau_0)
