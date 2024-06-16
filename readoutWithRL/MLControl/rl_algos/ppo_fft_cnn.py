@@ -393,6 +393,10 @@ def PPO_make_train(config):
                         "bandwidth: {bandwidth}",
                         bandwidth=jnp.round(jnp.mean(info["bandwidth"]), 3),
                     )
+                    jax.debug.print(
+                        "pulse reset val: {p}",
+                        p=jnp.round(jnp.mean(info["pulse reset val"]), 3),
+                    )
 
                 def pass_stats(global_updatestep, info):
                     pass
