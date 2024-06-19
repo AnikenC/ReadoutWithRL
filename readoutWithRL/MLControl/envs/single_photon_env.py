@@ -182,8 +182,8 @@ class SinglePhotonLangevinReadoutEnv(SingleStepEnvironment):
         self.photon_uncertainty = 0.5
         self.mu = res_amp_scaling
         self.min_acq_time = 0.032
-        self.gauss_kernel_len = 15 # For default gaussian smoothing
-        self.gauss_kernel_std = 2.0 # For default gaussian smoothing
+        self.gauss_kernel_len = 15  # For default gaussian smoothing
+        self.gauss_kernel_std = 2.0  # For default gaussian smoothing
         params = self.default_params
 
         self.bandwidth = bandwidth
@@ -614,37 +614,46 @@ class SinglePhotonLangevinReadoutEnv(SingleStepEnvironment):
         )
 
         state = jnp.array(
-            [reward, max_pf, max_photon, photon_reset_time, smoothness, bandwidth, pulse_reset_val],
+            [
+                reward,
+                max_pf,
+                max_photon,
+                photon_reset_time,
+                smoothness,
+                bandwidth,
+                pulse_reset_val,
+            ],
             dtype=jnp.float64,
         )
 
         return (reward, state)
-    
+
     def pf_reward(self, max_pf):
         return self.pF_factor * max_pf
-    
+
     def time_reward(self, photon_reset_time):
-        return -self.time_factor * photon_reset_time
-    
+        return self.time_factor * (self._t1 - photon_reset_time) * self._kappa
+
     def smoothness_reward(self, smoothness):
-        s_reward = relu(
+        s_reward = -relu(
             smoothness / (self.smoothness_baseline_scale * self.baseline_smoothness)
             - 1.0
         )
-        return -self.smoothness_factor * s_reward
-    
+        s_reward += 1.0 / (self.smoothness_baseline_scale * self.baseline_smoothness)
+        return self.smoothness_factor * s_reward
+
     def bandwidth_reward(self, bandwidth):
         b_reward = relu(bandwidth / self.bandwidth - 1.0)
-        return -self.bandwidth_factor * b_reward ** 2
-    
+        return -self.bandwidth_factor * b_reward**2
+
     def photon_pen(self, max_photon):
         return self.photon_penalty * relu(max_photon / self.actual_max_photons - 1.0)
-    
+
     def order_pen(self, pulse_end_time, max_pf_time):
         return self.order_penalty * (1.0 - jnp.sign(pulse_end_time - max_pf_time))
-    
+
     def amp_reward(self, pulse_reset_val):
-        return -self.amp_penalty * pulse_reset_val
+        return self.amp_penalty * (1.0 - pulse_reset_val)
 
     def rollout_action(
         self,
