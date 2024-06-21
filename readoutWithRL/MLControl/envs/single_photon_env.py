@@ -632,7 +632,7 @@ class SinglePhotonLangevinReadoutEnv(SingleStepEnvironment):
         return self.pF_factor * max_pf
 
     def time_reward(self, photon_reset_time):
-        return self.time_factor * (self._t1 - photon_reset_time) * self._kappa
+        return self.time_factor * ((self._t1 - photon_reset_time) * self._kappa + 3.0)
 
     def smoothness_reward(self, smoothness):
         s_reward = -relu(
