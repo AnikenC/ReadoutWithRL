@@ -148,7 +148,7 @@ class SinglePhotonLangevinReadoutEnv(SingleStepEnvironment):
         snr_scale_factor: Optional[float] = 10.0,
         gamma_I: Optional[float] = 1 / 26,
         photon_gamma: Optional[float] = 1 / 300,
-        num_t1: Optional[float] = 8.0,
+        sim_t1: Optional[float] = 0.6,
         init_fid: Optional[float] = 1.0 - 1e-3,
         photon_weight: Optional[float] = 1.0,
         standard_fid: Optional[float] = 0.99,
@@ -160,7 +160,7 @@ class SinglePhotonLangevinReadoutEnv(SingleStepEnvironment):
         self._chi = chi
         self._kerr = kerr
         self._init_fid = init_fid
-        self._t1 = num_t1 * self._tau
+        self._t1 = sim_t1
         self._ideal_photon = nR
         self._photon_gamma = photon_gamma
         self._gamma_I = gamma_I
@@ -629,17 +629,19 @@ class SinglePhotonLangevinReadoutEnv(SingleStepEnvironment):
         return (reward, state)
 
     def pf_reward(self, max_pf):
-        return self.pF_factor * max_pf
+        # Defining relative to ideal pF so that reward term is negative
+        # 3.0 corresponds to a fidelity of 0.999 which is the max
+        # fidelity observed on these systems
+        return self.pF_factor * (max_pf - 3.0)
 
     def time_reward(self, photon_reset_time):
-        return self.time_factor * ((self._t1 - photon_reset_time) * self._kappa + 3.0)
+        return -self.time_factor * photon_reset_time * self._kappa
 
     def smoothness_reward(self, smoothness):
         s_reward = -relu(
             smoothness / (self.smoothness_baseline_scale * self.baseline_smoothness)
             - 1.0
         )
-        s_reward += 1.0 / (self.smoothness_baseline_scale * self.baseline_smoothness)
         return self.smoothness_factor * s_reward
 
     def bandwidth_reward(self, bandwidth):
@@ -653,7 +655,7 @@ class SinglePhotonLangevinReadoutEnv(SingleStepEnvironment):
         return self.order_penalty * (1.0 - jnp.sign(pulse_end_time - max_pf_time))
 
     def amp_reward(self, pulse_reset_val):
-        return self.amp_penalty * (1.0 - pulse_reset_val)
+        return -self.amp_penalty * pulse_reset_val
 
     def rollout_action(
         self,

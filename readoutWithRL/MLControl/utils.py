@@ -9,19 +9,68 @@ import chex
 from typing import Optional
 
 from envs.single_photon_env import SinglePhotonLangevinReadoutEnv
-from envs.photon_env import BatchedPhotonLangevinReadoutEnv
+from rl_algos.rl_wrappers import VecEnv
 
 
-def photon_env_dicts():
-    return {
-        "single_langevin_env": SinglePhotonLangevinReadoutEnv,
-        "photon_langevin_readout_env": BatchedPhotonLangevinReadoutEnv,
-    }
+def stability_tester(
+    key: chex.PRNGKey,
+    env: SinglePhotonLangevinReadoutEnv,
+    waveforms: jnp.ndarray,
+    err: float,
+):
+    ### Process Waveforms ###
+    # Scale Amplitudes appropriately as would be done in experiment
+    waveforms_scaled = waveform_err_scaler(env, err, waveforms)
+
+    # No need to scale durations if fixed sim_t1 is used
+
+    # Run Simulations
+    vec_env = VecEnv(env)
+    rng, _rng = jax.random.split(key)
+    rng_reset = jax.random.split(_rng, len(waveforms))
+
+    _, vec_init_state = vec_env.reset(rng_reset, None)
+
+    rng, _rng = jax.random.split(rng)
+    rng_step = jax.random.split(_rng, len(waveforms))
+
+    obs, state, reward, done, info = vec_env.step(
+        rng_step, vec_init_state, waveforms_scaled, None
+    )
+
+    max_pFs = state.max_pf
+    photon_times = state.photon_time
+    max_photons = state.max_photon
+
+    return max_pFs, photon_times, max_photons
+
+
+def get_kc_arrs(kappa: float, chi: float, err: float):
+    err_arr = jnp.array([1.0 - err, 1.0, 1.0 + err])
+    k_arr = kappa * err_arr
+    c_arr = chi * err_arr
+    kc_grid = jnp.array(jnp.meshgrid(k_arr, c_arr)).reshape(2, -1).T
+    kappa_vals = kc_grid[:, 0]
+    chi_vals = kc_grid[:, 1]
+    return k_arr, c_arr, kappa_vals, chi_vals
+
+
+def waveform_err_scaler(
+    env: SinglePhotonLangevinReadoutEnv, err: float, waveforms: jnp.ndarray
+):
+    kappa = env._kappa
+    chi = env._chi
+    _, _, k_vals, c_vals = get_kc_arrs(kappa, chi, err)
+
+    n0 = 4 * env.a0**2 / (kappa**2 + chi**2)
+    a0_vals = 0.5 * jnp.sqrt(n0 * (k_vals**2 + c_vals**2))
+    waveforms_scaled = waveforms / a0_vals.reshape(-1, 1)
+    return waveforms_scaled
 
 
 def waveform_kappa_chi_stability_tester(
     key: chex.PRNGKey,
-    waveform: chex.PRNGKey,
+    waveform: jnp.ndarray,
     env_name: str,
     main_env_config: dict,
     error_percentage: Optional[float] = 10.0,
@@ -31,7 +80,7 @@ def waveform_kappa_chi_stability_tester(
     kappa = reduced_config.pop("kappa")
     chi = reduced_config.pop("chi")
 
-    env_class = photon_env_dicts()[env_name]
+    env_class = SinglePhotonLangevinReadoutEnv
 
     def env_tester(key: chex.PRNGKey, kappa: float, chi: float):
         env = env_class(kappa=kappa, chi=chi, **reduced_config)
