@@ -12,14 +12,11 @@ import chex
 
 from rl_algos.rl_wrappers import VecEnv
 
-from envs.photon_env import BatchedPhotonLangevinReadoutEnv
 from envs.single_photon_env import SinglePhotonLangevinReadoutEnv
 
 import time
 
 import matplotlib.pyplot as plt
-
-from utils import photon_env_dicts
 
 
 class SeparateActorCritic(nn.Module):
@@ -136,8 +133,7 @@ def PPO_make_train(config):
     """
     Function that returns a trainable function for an input configuration dictionary
     """
-    env_dict = photon_env_dicts()
-    env = env_dict[config["ENV_NAME"]](**config["ENV_PARAMS"])
+    env = SinglePhotonLangevinReadoutEnv(**config["ENV_PARAMS"])
     env = VecEnv(env)
 
     config["MINIBATCH_SIZE"] = (
