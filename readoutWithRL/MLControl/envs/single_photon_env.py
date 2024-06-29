@@ -47,6 +47,7 @@ class EnvState:
     max_pf: float
     max_photon: float
     photon_time: float
+    real_photon_reset_time: float
     smoothness: float
     bandwidth: float
     pulse_reset_val: float
@@ -482,7 +483,11 @@ class SinglePhotonLangevinReadoutEnv(SingleStepEnvironment):
         photon_reset_time = pulse_end_time + self.photon_weight * self._tau * jnp.log(
             pulse_reset_photon / self._ideal_photon
         )
+        real_photon_reset_time = pulse_end_time + self._tau * jnp.log(
+            pulse_reset_photon / self._ideal_photon
+        )
         photon_reset_time = jnp.clip(photon_reset_time, a_min=pulse_end_time)
+        real_photon_reset_time = jnp.clip(real_photon_reset_time, a_min=pulse_end_time)
 
         # TODO: Add shot noise to photon reset time
         rng, rng_time = jax.random.split(rng)
@@ -501,6 +506,7 @@ class SinglePhotonLangevinReadoutEnv(SingleStepEnvironment):
             max_pf,
             max_photons,
             photon_reset_time,
+            real_photon_reset_time,
             pulse_end_time,
             max_pf_time,
             smoothness,
@@ -588,6 +594,7 @@ class SinglePhotonLangevinReadoutEnv(SingleStepEnvironment):
             max_pf,
             max_photon,
             photon_reset_time,
+            real_photon_reset_time,
             pulse_end_time,
             max_pf_time,
             smoothness,
@@ -619,6 +626,7 @@ class SinglePhotonLangevinReadoutEnv(SingleStepEnvironment):
                 max_pf,
                 max_photon,
                 photon_reset_time,
+                real_photon_reset_time,
                 smoothness,
                 bandwidth,
                 pulse_reset_val,
@@ -911,6 +919,7 @@ class SinglePhotonLangevinReadoutEnv(SingleStepEnvironment):
             max_pf=0.0,
             max_photon=0.0,
             photon_time=0.0,
+            real_photon_reset_time=0.0,
             smoothness=0.0,
             bandwidth=0.0,
             pulse_reset_val=0.0,
@@ -931,6 +940,7 @@ class SinglePhotonLangevinReadoutEnv(SingleStepEnvironment):
             "max pF": env_state.max_pf,
             "max photon": env_state.max_photon,
             "photon time": env_state.photon_time,
+            "real photon reset time": env_state.real_photon_reset_time,
             "smoothness": env_state.smoothness,
             "bandwidth": env_state.bandwidth,
             "pulse reset val": env_state.pulse_reset_val,

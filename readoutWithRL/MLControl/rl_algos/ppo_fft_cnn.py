@@ -386,6 +386,10 @@ def PPO_make_train(config):
                         time=jnp.round(jnp.mean(info["photon time"]), 4),
                     )
                     jax.debug.print(
+                        "real photon reset time: {time}",
+                        time=jnp.round(jnp.mean(info["real photon reset time"]), 4),
+                    )
+                    jax.debug.print(
                         "smoothness: {smoothness}",
                         smoothness=jnp.round(jnp.mean(info["smoothness"]), 6),
                     )
