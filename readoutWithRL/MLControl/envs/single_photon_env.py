@@ -119,6 +119,7 @@ class EnvParams:
 
     # Real and Imaginary Components of Ground and Excited Resonator Coherent State
     y0 = jnp.array([0.0, 0.0, 0.0, 0.0], dtype=jnp.float64)
+    max_steps_in_episode = 1
 
 
 class SinglePhotonLangevinReadoutEnv(SingleStepEnvironment):
@@ -726,6 +727,7 @@ class SinglePhotonLangevinReadoutEnv(SingleStepEnvironment):
             s_max_pf,
             s_max_photon,
             s_photon_reset_time,
+            s_real_photon_reset_time,
             s_pulse_end_time,
             s_max_pf_time,
             s_smoothness,
@@ -745,6 +747,7 @@ class SinglePhotonLangevinReadoutEnv(SingleStepEnvironment):
             g_max_pf,
             g_max_photon,
             g_photon_reset_time,
+            g_real_photon_reset_time,
             g_pulse_end_time,
             g_max_pf_time,
             g_smoothness,
