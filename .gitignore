@@ -1,6 +1,9 @@
 # july exps-results folder
 july_results/
 
+# august priv exps-results folder
+august_priv_results/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
